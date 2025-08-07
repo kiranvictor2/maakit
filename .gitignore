@@ -1,0 +1,61 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+__pycache__/
+*.pyc
+
+
+# C extensions
+*.so
+
+# Virtual environment
+venv/
+.env/
+.venv/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+
+# Logs and debug files
+*.log
+*.pot
+*.pyc
+
+# Environment variables / secrets
+.env
+
+# Pytest / coverage
+.pytest_cache/
+htmlcov/
+coverage.xml
+.cache/
+
+# IDEs / Editors
+.vscode/
+.idea/
+*.swp
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# MyPy / Pylint / Pyright
+.mypy_cache/
+.pyre/
+.pytype/
+
+# FastAPI specific
+# (if you have static/media folders for file uploads or builds)
+static/
+media/
+
+# Database (SQLite for example)
+*.sqlite3
+*.db
+
+# Docker
+*.pid
+docker-compose.override.yml
