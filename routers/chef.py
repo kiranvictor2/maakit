@@ -16,7 +16,7 @@ async def create_or_get_chef(chef: ChefPhoneCreate):
     existing = await db["chef_user"].find_one({"phone_number": chef.phone_number})
     
     if existing:
-        token = create_access_token({"phone": existing["phone"]})
+        token = create_access_token({"phone": existing["phone_number"]})
         return {
             "id": str(existing["_id"]),
             "message": "Chef already exists",
