@@ -81,37 +81,72 @@ from fastapi import Form, File, UploadFile
 
 @router.post("/chef/profile/update")
 async def update_chef_profile(
-    name: str = Form(None),  # optional
-    email: str = Form(None),  # optional
-    native_place: str = Form(None),  # optional
-    aadhar_number: str = Form(None),  # optional
-    food_styles: list[str] = Form(None),  # optional list
+    name: str = Form(None),
+    email: str = Form(None),
+    native_place: str = Form(None),
+    aadhar_number: str = Form(None),
+    food_styles: list[str] = Form(None),
     file: UploadFile = File(None),
     current_user: dict = Depends(get_current_user)
 ):
+    print("Current user:", current_user)
     user_id = current_user["sub"]
 
     update_data = {}
 
     if name:
-        update_data["profile.name"] = name
+        update_data["name"] = name
     if email:
-        update_data["profile.email"] = email
+        update_data["email"] = email
     if native_place:
-        update_data["profile.native_place"] = native_place
+        update_data["native_place"] = native_place
     if aadhar_number:
-        update_data["profile.aadhar_number"] = aadhar_number
+        update_data["aadhar_number"] = aadhar_number
     if food_styles:
-        update_data["profile.food_styles"] = food_styles
+        update_data["food_styles"] = food_styles
     if file:
         contents = await file.read()
         photo_url = save_image_and_get_url(contents, file.filename)
-        update_data["profile.photo_url"] = photo_url
+        update_data["photo_url"] = photo_url
 
     if update_data:
-        await db["chefs"].update_one(
+        await db["chef_user"].update_one(
             {"_id": ObjectId(user_id)},
             {"$set": update_data}
         )
 
     return {"message": "Profile updated successfully"}
+
+#======================add iten ------------------
+
+
+@router.post("/chef/item/add")
+async def add_food_item(
+    food_name: str = Form(...),
+    food_style: str = Form(...),
+    food_type: str = Form(...),
+    quantity: int = Form(...),
+    price: float = Form(...),
+    off: float = Form(...),
+    photo: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user)
+):
+    chef_id = current_user["sub"]
+
+    contents = await photo.read()
+    photo_url = save_image_and_get_url(contents, photo.filename)
+
+    food_item = {
+        "chef_id": ObjectId(chef_id),
+        "food_name": food_name,
+        "food_style": food_style,
+        "food_type": food_type,
+        "quantity": quantity,
+        "price": price,
+        "off": off,
+        "photo_url": photo_url
+    }
+
+    result = await db["food_items"].insert_one(food_item)
+
+    return {"message": "Food item added", "item_id": str(result.inserted_id)}
