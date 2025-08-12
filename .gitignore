@@ -2,17 +2,17 @@
 __pycache__/
 *.py[cod]
 *$py.class
-__pycache__/
-*.pyc
-
 
 # C extensions
 *.so
 
-# Virtual environment
-venv/
-.env/
+# Virtual environments
 .venv/
+venv/
+env/
+
+# Environment variables / secrets
+.env
 
 # Distribution / packaging
 build/
@@ -21,13 +21,8 @@ dist/
 
 # Logs and debug files
 *.log
-*.pot
-*.pyc
 
-# Environment variables / secrets
-.env
-
-# Pytest / coverage
+# Test-related files
 .pytest_cache/
 htmlcov/
 coverage.xml
@@ -38,28 +33,25 @@ coverage.xml
 .idea/
 *.swp
 
-# OS Files
+# OS files
 .DS_Store
 Thumbs.db
 
-# MyPy / Pylint / Pyright
+# Type checker caches
 .mypy_cache/
 .pyre/
 .pytype/
 
-# FastAPI specific
-# (if you have static/media folders for file uploads or builds)
+# FastAPI-specific or user folders
 static/
 media/
+uploads/
 
-# Database (SQLite for example)
+# SQLite / local databases
 *.sqlite3
 *.db
 
 # Docker
 *.pid
 docker-compose.override.yml
-
-venv/
-__pycache__
-uploads/
+__pycache__/

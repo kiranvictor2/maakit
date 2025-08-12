@@ -150,3 +150,19 @@ async def add_food_item(
     result = await db["food_items"].insert_one(food_item)
 
     return {"message": "Food item added", "item_id": str(result.inserted_id)}
+
+
+
+food_styles = [
+    "Andhra", "Telangana", "Karnataka", "Maharashtrian", "Tamil Nadu",
+    "Kerala", "Bengali", "Punjabi", "Rajasthani", "Gujarati", "Goan",
+    "Kashmiri", "Odia", "Assamese", "Sikkimese", "Naga", "Manipuri",
+    "Mizo", "Tripuri", "Arunachali", "Meghalayan", "Madhya Pradesh",
+    "Chhattisgarhi"
+]
+
+from typing import List
+
+@router.get("/food-styles", response_model=List[str])
+def get_food_styles():
+    return food_styles
