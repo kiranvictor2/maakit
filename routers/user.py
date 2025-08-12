@@ -2,18 +2,30 @@
 from fastapi import APIRouter, HTTPException
 from models.user import UserCreate
 from database import db
-from models.user import LoginRequest
+from models.user import LoginRequest,userPhoneCreate
 from auth.utils import create_access_token  # ✅ Import token creator
 router = APIRouter()
 
 @router.post("/users")
-async def create_user(user: UserCreate):
-    exists = await db["app_user"].find_one({"phone": user.phone})
-    if exists:
-        raise HTTPException(status_code=400, detail="Phone already exists")
+async def create_or_get_user(chef: userPhoneCreate):
+    existing = await db["app_user"].find_one({"phone_number": chef.phone_number})
+    
+    if existing:
+        token = create_access_token({"phone": existing["phone_number"]})
+        return {
+            "id": str(existing["_id"]),
+            "message": "user already exists",
+            "token": token
+        }
 
-    result = await db["app_user"].insert_one(user.dict())
-    return {"id": str(result.inserted_id), "message": "User created"}
+    # If not exists, create new
+    result = await db["app_user"].insert_one(chef.dict())
+    token = create_access_token({"phone_number": chef.phone_number})
+    return {
+        "id": str(result.inserted_id),
+        "message": "user created successfully",
+        "token": token
+    }
 
 
 

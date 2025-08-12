@@ -15,3 +15,7 @@ class UserCreate(BaseModel):
 class LoginRequest(BaseModel):
     phone_number: str
 
+
+class userPhoneCreate(BaseModel):
+    phone_number: str
+    role: str = "chef"
