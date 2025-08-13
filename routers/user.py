@@ -1,5 +1,8 @@
 # routers/user.py
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from bson import ObjectId
+from auth.jwt_handler import get_current_user
+
 from models.user import UserCreate
 from database import db
 from models.user import LoginRequest,userPhoneCreate
@@ -52,3 +55,49 @@ async def login_user(data: LoginRequest):
             "phone_number": user["phone_number"]
         }
     }
+
+@router.get("/items/style/{food_style}")
+async def get_items_by_style(food_style: str):
+    food_style = food_style.strip()
+    items = await db["food_items"].find({
+        "food_style": {"$regex": f"\\s*{food_style}\\s*", "$options": "i"}
+    }).to_list(length=None)
+
+    for item in items:
+        item["_id"] = str(item["_id"])
+        item["chef_id"] = str(item["chef_id"])
+
+    return {"total": len(items), "items": items}
+
+
+
+
+@router.get("/items/type/{food_type}")
+async def get_items_by_type(food_type: str):
+    food_type = food_type.strip()
+    items = await db["food_items"].find({
+        "food_type": {"$regex": f"\\s*{food_type}\\s*", "$options": "i"}
+    }).to_list(length=None)
+
+    for item in items:
+        item["_id"] = str(item["_id"])
+        item["chef_id"] = str(item["chef_id"])
+
+    return {"total": len(items), "items": items}
+
+def serialize_doc(doc):
+    """Convert MongoDB document to JSON-serializable dict."""
+    return {
+        "id": str(doc["_id"]),
+        "food_style": doc["food_style"],
+        "image_url": doc.get("image_url")
+    }
+
+@router.get("/all-food-styles/")
+async def get_all_food_styles():
+    cursor = db["food_styles"].find({})
+    styles = []
+    async for doc in cursor:
+        styles.append(serialize_doc(doc))
+    return styles
+
