@@ -124,6 +124,7 @@ async def update_chef_profile(
 async def add_food_item(
     food_name: str = Form(...),
     food_style: str = Form(...),
+    service_type: str = Form(...),
     food_type: str = Form(...),
     quantity: int = Form(...),
     price: float = Form(...),
@@ -144,7 +145,8 @@ async def add_food_item(
         "quantity": quantity,
         "price": price,
         "off": off,
-        "photo_url": photo_url
+        "photo_url": photo_url,
+        "service_type": service_type
     }
 
     result = await db["food_items"].insert_one(food_item)
