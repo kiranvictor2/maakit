@@ -101,3 +101,45 @@ async def get_all_food_styles():
         styles.append(serialize_doc(doc))
     return styles
 
+
+
+
+#breakfast #lunch snacks dinner
+
+@router.get("/items/category/{food_type}/{category}")
+async def get_items_by_type(
+    food_type: str,
+    category: str,
+    skip: int = Query(0, ge=0, description="Number of items to skip"),
+    limit: int = Query(20, gt=0, le=100, description="Maximum number of items to return")
+):
+    """
+    Get food items by food style (regex) and service type (exact match).
+    Supports pagination using skip and limit.
+    """
+    food_type = food_type.strip()
+    category = category.strip()
+
+    # Query MongoDB
+    query = {
+        "food_style": {"$regex": f"\\s*{food_type}\\s*", "$options": "i"},
+        "service_type": category
+    }
+
+    items_cursor = db["food_items"].find(query).skip(skip).limit(limit)
+    items = await items_cursor.to_list(length=limit)
+
+    # Convert ObjectId to string
+    for item in items:
+        item["_id"] = str(item["_id"])
+        item["chef_id"] = str(item["chef_id"])
+
+    # Return total count for frontend pagination
+    total_count = await db["food_items"].count_documents(query)
+
+    return {
+        "total": total_count,
+        "skip": skip,
+        "limit": limit,
+        "items": items
+    }   
