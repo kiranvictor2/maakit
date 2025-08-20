@@ -19,3 +19,12 @@ class LoginRequest(BaseModel):
 class userPhoneCreate(BaseModel):
     phone_number: str
     role: str = "chef"
+
+from typing import List, Optional
+from pydantic import BaseModel
+
+class FoodFilter(BaseModel):
+    food_styles: Optional[List[str]] = None
+    service_types: Optional[List[str]] = None
+    menu_types: Optional[List[str]] = None
+    sort_by: Optional[str] = None

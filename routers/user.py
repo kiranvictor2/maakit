@@ -2,7 +2,8 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from bson import ObjectId
 from auth.jwt_handler import get_current_user
-
+from models.user import FoodFilter   # adjust path to your actual file
+from database import get_db
 from models.user import UserCreate
 from database import db
 from models.user import LoginRequest,userPhoneCreate
@@ -143,3 +144,82 @@ async def get_items_by_type(
         "limit": limit,
         "items": items
     }   
+
+
+
+#get filtered items
+
+async def get_filtered_food_items(
+    db,
+    food_styles: list[str] = None,
+    service_types: list[str] = None,
+    menu_types: list[str] = None,
+    sort_by: str = None
+):
+    filters = {}
+
+    conditions = []
+
+    # Food Style
+    if food_styles:
+        conditions.extend([
+            {"food_style": {"$regex": f"\\s*{fs}\\s*", "$options": "i"}}
+            for fs in food_styles
+        ])
+
+    # Service Type
+    if service_types:
+        conditions.extend([
+            {"service_type": {"$regex": f"\\s*{st}\\s*", "$options": "i"}}
+            for st in service_types
+        ])
+
+    # Menu Type
+    if menu_types:
+        conditions.extend([
+            {"food_type": {"$regex": f"\\s*{mt}\\s*", "$options": "i"}}
+            for mt in menu_types
+        ])
+
+    if conditions:
+        filters["$and"] = conditions   # combine all conditions
+
+    # Build query
+    cursor = db["food_items"].find(filters)
+
+    # Sort
+    if sort_by and sort_by.lower() == "top rated":
+        cursor = cursor.sort("rating", -1)
+
+    # Return list
+    items = await cursor.to_list(length=None)
+    return items
+
+def serialize_doc(doc: dict) -> dict:
+    """Convert MongoDB document to JSON serializable dict."""
+    serialized = {}
+    for key, value in doc.items():
+        if isinstance(value, ObjectId):
+            serialized[key] = str(value)
+        elif isinstance(value, list):
+            serialized[key] = [
+                str(v) if isinstance(v, ObjectId) else v for v in value
+            ]
+        else:
+            serialized[key] = value
+    return serialized
+
+@router.post("/filter-food")
+async def filter_food(filter_data: FoodFilter, db=Depends(get_db)):
+    items = await get_filtered_food_items(
+        db,
+        food_styles=filter_data.food_styles,
+        service_types=filter_data.service_types,
+        menu_types=filter_data.menu_types,
+        sort_by=filter_data.sort_by
+    )
+
+    serialized_items = [serialize_doc(item) for item in items]
+
+    return {"count": len(serialized_items), "items": serialized_items}
+
