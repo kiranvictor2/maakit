@@ -1,13 +1,13 @@
 # routers/chef.py
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException,Depends
 from bson import ObjectId
 
 from models.chef import ChefCreate
 from database import db
-from models.chef import ChefLoginRequest,ChefPhoneCreate
+from models.chef import ChefLoginRequest,ChefPhoneCreate,LocationUpdate
 from auth.utils import create_access_token
 from auth.jwt_handler import get_current_user
-
+from enum import Enum
 
 router = APIRouter()
 
@@ -56,6 +56,48 @@ async def login_chef(data: ChefLoginRequest):
         }
     }
 
+
+
+
+
+
+#location
+@router.post("/cheflocation/update")
+async def update_chef_location(
+    location: LocationUpdate, 
+    current_user: dict = Depends(get_current_user)
+):
+    chef_id = current_user.get("sub")
+    
+    result = await db["chef_user"].update_one(
+        {"_id": ObjectId(chef_id)},
+        {"$set": {
+            "location": {
+                "type": "Point",
+                "coordinates": [location.longitude, location.latitude],
+                "address": location.address
+            }
+        }}
+    )
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Chef not found")
+    
+    return {"status": "success", "message": "Location updated"}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 from fastapi import APIRouter, UploadFile, File, Form, Depends
 import os
 import uuid
@@ -77,6 +119,7 @@ def save_image_and_get_url(contents: bytes, filename: str = None) -> str:
 
     # Return URL (adjust based on your deployment)
     return f"/static/{unique_name}"  # FastAPI static route
+
 from fastapi import Form, File, UploadFile
 
 @router.post("/chef/profile/update")
@@ -119,12 +162,44 @@ async def update_chef_profile(
 
 #======================add iten ------------------
 
+# Food styles Enum
+class FoodStyleEnum(str, Enum):
+    Andhra = "Andhra"
+    Telangana = "Telangana"
+    Karnataka = "Karnataka"
+    Maharashtrian = "Maharashtrian"
+    Tamil_Nadu = "Tamil Nadu"
+    Kerala = "Kerala"
+    Bengali = "Bengali"
+    Punjabi = "Punjabi"
+    Rajasthani = "Rajasthani"
+    Gujarati = "Gujarati"
+    Goan = "Goan"
+    Kashmiri = "Kashmiri"
+    Odia = "Odia"
+    Assamese = "Assamese"
+    Sikkimese = "Sikkimese"
+    Naga = "Naga"
+    Manipuri = "Manipuri"
+    Mizo = "Mizo"
+    Tripuri = "Tripuri"
+    Arunachali = "Arunachali"
+    Meghalayan = "Meghalayan"
+    Madhya_Pradesh = "Madhya Pradesh"
+    Chhattisgarhi = "Chhattisgarhi"
 
+# Service type Enum
+class ServiceTypeEnum(str, Enum):
+    Breakfast = "Breakfast"
+    Lunch = "Lunch"
+    Dinner = "Dinner"
+
+# Updated endpoint
 @router.post("/chef/item/add")
 async def add_food_item(
     food_name: str = Form(...),
-    food_style: str = Form(...),
-    service_type: str = Form(...),
+    food_style: FoodStyleEnum = Form(...),
+    service_type: ServiceTypeEnum = Form(...),  # <-- Enum validation
     food_type: str = Form(...),
     quantity: int = Form(...),
     price: float = Form(...),
@@ -140,13 +215,13 @@ async def add_food_item(
     food_item = {
         "chef_id": ObjectId(chef_id),
         "food_name": food_name,
-        "food_style": food_style,
+        "food_style": food_style.value,
         "food_type": food_type,
         "quantity": quantity,
         "price": price,
         "off": off,
         "photo_url": photo_url,
-        "service_type": service_type
+        "service_type": service_type.value
     }
 
     result = await db["food_items"].insert_one(food_item)
@@ -154,17 +229,3 @@ async def add_food_item(
     return {"message": "Food item added", "item_id": str(result.inserted_id)}
 
 
-
-food_styles = [
-    "Andhra", "Telangana", "Karnataka", "Maharashtrian", "Tamil Nadu",
-    "Kerala", "Bengali", "Punjabi", "Rajasthani", "Gujarati", "Goan",
-    "Kashmiri", "Odia", "Assamese", "Sikkimese", "Naga", "Manipuri",
-    "Mizo", "Tripuri", "Arunachali", "Meghalayan", "Madhya Pradesh",
-    "Chhattisgarhi"
-]
-
-from typing import List
-
-@router.get("/food-styles", response_model=List[str])
-def get_food_styles():
-    return food_styles

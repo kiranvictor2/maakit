@@ -22,6 +22,15 @@ class ChefPhoneCreate(BaseModel):
     phone_number: str
     role: str = "chef"
 
+#location
+
+class LocationUpdate(BaseModel):
+    latitude: float
+    longitude: float
+    address: str | None = None
+
+
+
 
 
 

@@ -12,6 +12,24 @@ class UserCreate(BaseModel):
     role: str = "user"
     profile: Optional[UserProfile] = None
 
+
+
+
+#location
+
+class LocationUpdate(BaseModel):
+    latitude: float
+    longitude: float
+    address: str | None = None
+
+
+
+
+
+
+
+
+
 class LoginRequest(BaseModel):
     phone_number: str
 

@@ -6,7 +6,7 @@ from models.user import FoodFilter   # adjust path to your actual file
 from database import get_db
 from models.user import UserCreate
 from database import db
-from models.user import LoginRequest,userPhoneCreate
+from models.user import LoginRequest,userPhoneCreate,LocationUpdate
 from auth.utils import create_access_token  # ✅ Import token creator
 router = APIRouter()
 
@@ -56,6 +56,51 @@ async def login_user(data: LoginRequest):
             "phone_number": user["phone_number"]
         }
     }
+
+
+
+
+@router.post("/userlocation/update")
+async def update_location(
+    location: LocationUpdate, 
+    current_user: dict = Depends(get_current_user)
+):
+    # safer: use sub instead of _id
+    user_id = current_user.get("sub")  
+
+    result = await db["app_user"].update_one(
+        {"_id": ObjectId(user_id)},
+        {"$set": {
+            "location": {
+                "type": "Point",
+                "coordinates": [location.longitude, location.latitude],
+                "address": location.address
+            }
+        }}
+    )
+
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return {"status": "success", "message": "Location updated"}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 @router.get("/items/style/{food_style}")
 async def get_items_by_style(food_style: str):
@@ -223,3 +268,104 @@ async def filter_food(filter_data: FoodFilter, db=Depends(get_db)):
 
     return {"count": len(serialized_items), "items": serialized_items}
 
+
+
+
+
+
+
+
+
+@router.get("/chefs/nearby")
+async def get_nearby_chefs(
+    max_distance_m: int = 5000,  # default 5 km
+    current_user: dict = Depends(get_current_user)
+):
+    user_id = current_user["sub"]
+
+    # 1️⃣ Get current user location
+    user = await db["app_user"].find_one({"_id": ObjectId(user_id)})
+    if not user or "location" not in user:
+        return {"status": "error", "message": "User location not set"}
+
+    user_location = user["location"]["coordinates"]  # [longitude, latitude]
+
+    # 2️⃣ Find nearby chefs with location
+    projection_fields = {
+        "id": 1,
+        "name": 1,
+        "location": 1,
+        "service_types": 1,
+        "menu_types": 1
+    }
+
+    nearby_chefs = await db["chef_user"].find(
+        {
+            "location": {
+                "$near": {
+                    "$geometry": {
+                        "type": "Point",
+                        "coordinates": user_location
+                    },
+                    "$maxDistance": max_distance_m
+                }
+            }
+        },
+        projection=projection_fields
+    ).to_list(100)
+
+    nearby_chefs = [convert_objectid(c) for c in nearby_chefs]
+
+    return {"status": "success", "chefs": nearby_chefs}
+
+def convert_objectid(doc):
+    if "_id" in doc:
+        doc["_id"] = str(doc["_id"])
+    return doc
+
+
+
+#-----------------------------------------------------------------Near-by ----------------------------------------------------#
+@router.get("/food/nearby")
+async def get_nearby_chef_food(
+    max_distance_m: int = 5000,  # default 5 km
+    current_user: dict = Depends(get_current_user)
+):
+    user_id = current_user["sub"]
+
+    # 1️⃣ Get current user location
+    user = await db["app_user"].find_one({"_id": ObjectId(user_id)})
+    if not user or "location" not in user:
+        return {"status": "error", "message": "User location not set"}
+
+    user_location = user["location"]["coordinates"]  # [longitude, latitude]
+
+    # 2️⃣ Find nearby chefs
+    nearby_chefs = await db["chef_user"].find({
+        "location": {
+            "$near": {
+                "$geometry": {
+                    "type": "Point",
+                    "coordinates": user_location
+                },
+                "$maxDistance": max_distance_m
+            }
+        }
+    }).to_list(100)
+
+    if not nearby_chefs:
+        return {"status": "success", "items": [], "message": "No nearby chefs found"}
+
+    chef_ids = [c["_id"] for c in nearby_chefs]
+
+    # 3️⃣ Get food items for those chefs
+    food_items = await db["food_items"].find({
+        "chef_id": {"$in": chef_ids}
+    }).to_list(length=None)
+
+    # Convert ObjectId to string
+    for item in food_items:
+        item["_id"] = str(item["_id"])
+        item["chef_id"] = str(item["chef_id"])
+
+    return {"status": "success", "count": len(food_items), "items": food_items}
