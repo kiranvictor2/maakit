@@ -1,5 +1,5 @@
 # models/user.py
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 
 class UserProfile(BaseModel):
@@ -46,3 +46,12 @@ class FoodFilter(BaseModel):
     service_types: Optional[List[str]] = None
     menu_types: Optional[List[str]] = None
     sort_by: Optional[str] = None
+
+
+
+
+class ReviewCreate(BaseModel):
+    chef_id: str
+    taste_rating: int = Field(..., ge=1, le=5)
+    portion_rating: int = Field(..., ge=1, le=5)
+    review_text: str

@@ -6,8 +6,10 @@ from models.user import FoodFilter   # adjust path to your actual file
 from database import get_db
 from models.user import UserCreate
 from database import db
-from models.user import LoginRequest,userPhoneCreate,LocationUpdate
+from models.user import LoginRequest,userPhoneCreate,LocationUpdate,ReviewCreate
 from auth.utils import create_access_token  # ✅ Import token creator
+from datetime import datetime
+
 router = APIRouter()
 
 @router.post("/users")
@@ -275,7 +277,7 @@ async def filter_food(filter_data: FoodFilter, db=Depends(get_db)):
 
 
 
-
+#-------------------------------------------------Near by --------------------------------------------------------#
 @router.get("/chefs/nearby")
 async def get_nearby_chefs(
     max_distance_m: int = 5000,  # default 5 km
@@ -295,9 +297,9 @@ async def get_nearby_chefs(
         "id": 1,
         "name": 1,
         "location": 1,
-        "service_types": 1,
-        "menu_types": 1
+        "address": 1,
     }
+
 
     nearby_chefs = await db["chef_user"].find(
         {
@@ -369,3 +371,210 @@ async def get_nearby_chef_food(
         item["chef_id"] = str(item["chef_id"])
 
     return {"status": "success", "count": len(food_items), "items": food_items}
+
+
+
+
+#--------------------------------------------------all fod of particulat chef-------------------------------#
+@router.get("/food/by-chef/{chef_id}")
+async def get_food_by_chef(chef_id: str):
+    try:
+        chef_obj_id = ObjectId(chef_id)
+    except:
+        return {"status": "error", "message": "Invalid chef_id"}
+
+    # 1️⃣ Check if chef exists
+    chef = await db["chef_user"].find_one({"_id": chef_obj_id})
+    if not chef:
+        return {"status": "error", "message": "Chef not found"}
+
+    # 2️⃣ Get food items for that chef
+    food_items = await db["food_items"].find({
+        "chef_id": chef_obj_id
+    }).to_list(length=None)
+
+    # Convert ObjectId to string
+    for item in food_items:
+        item["_id"] = str(item["_id"])
+        item["chef_id"] = str(item["chef_id"])
+
+    # 3️⃣ Group by service_type
+    grouped_items = {
+        "Breakfast": [],
+        "Lunch": [],
+        "Dinner": []
+    }
+    for item in food_items:
+        stype = item.get("service_type", "Others").capitalize()
+        if stype in grouped_items:
+            grouped_items[stype].append(item)
+        else:
+            # If unexpected service_type comes, put under "Others"
+            if "Others" not in grouped_items:
+                grouped_items["Others"] = []
+            grouped_items["Others"].append(item)
+
+    return {
+        "status": "success",
+        "chef": {
+            "_id": str(chef["_id"]),
+            "name": chef.get("name"),
+            "address": chef.get("address"),
+        },
+        "count": len(food_items),
+        "items": grouped_items
+    }
+
+
+#----------------------------------------------create review ----------------------------------------#
+@router.post("/chef/review")
+async def add_review(
+    review: ReviewCreate,
+    current_user: dict = Depends(get_current_user)
+):
+    user_id = current_user["sub"]
+
+    review_doc = {
+        "user_id": ObjectId(user_id),
+        "chef_id": ObjectId(review.chef_id),
+        "taste_rating": review.taste_rating,
+        "portion_rating": review.portion_rating,
+        "review_text": review.review_text,
+        "created_at": datetime.utcnow()
+    }
+
+    result = await db["chef_reviews"].insert_one(review_doc)
+
+    return {
+        "status": "success",
+        "review_id": str(result.inserted_id)
+    }
+
+
+#-----------------------------------------------------get review-----------------------------------#
+@router.get("/chef/{chef_id}/reviews")
+async def get_chef_reviews(chef_id: str):
+    try:
+        chef_obj_id = ObjectId(chef_id)
+    except:
+        return {"status": "error", "message": "Invalid chef_id"}
+
+    reviews = await db["chef_reviews"].find(
+        {"chef_id": chef_obj_id}
+    ).sort("created_at", -1).to_list(length=None)
+
+    # Convert ObjectId to string
+    for r in reviews:
+        r["_id"] = str(r["_id"])
+        r["user_id"] = str(r["user_id"])
+        r["chef_id"] = str(r["chef_id"])
+        r["created_at"] = r["created_at"].isoformat()
+
+    # ✅ Optional: calculate average ratings
+    if reviews:
+        avg_taste = sum(r["taste_rating"] for r in reviews) / len(reviews)
+        avg_portion = sum(r["portion_rating"] for r in reviews) / len(reviews)
+    else:
+        avg_taste = avg_portion = 0
+
+    return {
+        "status": "success",
+        "count": len(reviews),
+        "average_ratings": {
+            "taste": round(avg_taste, 1),
+            "portion": round(avg_portion, 1)
+        },
+        "reviews": reviews
+    }
+
+
+
+
+
+#---------------------------------------------------About chef----------------------------------#
+
+@router.get("/chef/about/{chef_id}")
+async def get_chef_about(chef_id: str):
+    try:
+        chef_obj_id = ObjectId(chef_id)
+    except:
+        return {"status": "error", "message": "Invalid chef_id"}
+
+    # Find chef
+    chef = await db["chef_user"].find_one({"_id": chef_obj_id})
+    if not chef:
+        return {"status": "error", "message": "Chef not found"}
+
+    # ✅ Extract bio (about)
+    about_data = chef.get("profile", {}).get("bio")
+
+    return {
+        "status": "success",
+        "chef_id": str(chef["_id"]),
+        "about": about_data
+    }
+
+#--------------------------------------------------all fod of particulat chef-------------------------------#
+@router.get("/food/by-chef/{chef_id}")
+async def get_food_by_chef(chef_id: str):
+    try:
+        chef_obj_id = ObjectId(chef_id)
+    except:
+        return {"status": "error", "message": "Invalid chef_id"}
+
+    # 1️⃣ Check if chef exists
+    chef = await db["chef_user"].find_one({"_id": chef_obj_id})
+    if not chef:
+        return {"status": "error", "message": "Chef not found"}
+
+    # 2️⃣ Get food items for that chef
+    food_items = await db["food_items"].find({
+        "chef_id": chef_obj_id
+    }).to_list(length=None)
+
+    # Convert ObjectId to string
+    for item in food_items:
+        item["_id"] = str(item["_id"])
+        item["chef_id"] = str(item["chef_id"])
+
+    # 3️⃣ Group by service_type
+    grouped_items = {
+        "Breakfast": [],
+        "Lunch": [],
+        "Dinner": []
+    }
+    for item in food_items:
+        stype = item.get("service_type", "Others").capitalize()
+        if stype in grouped_items:
+            grouped_items[stype].append(item)
+        else:
+            # If unexpected service_type comes, put under "Others"
+            if "Others" not in grouped_items:
+                grouped_items["Others"] = []
+            grouped_items["Others"].append(item)
+
+    return {
+        "status": "success",
+        "chef": {
+            "_id": str(chef["_id"]),
+            "name": chef.get("name"),
+            "address": chef.get("address"),
+        },
+        "count": len(food_items),
+        "items": grouped_items
+    }
+
+
+food_styles = [
+    "Andhra", "Telangana", "Karnataka", "Maharashtrian", "Tamil Nadu",
+    "Kerala", "Bengali", "Punjabi", "Rajasthani", "Gujarati", "Goan",
+    "Kashmiri", "Odia", "Assamese", "Sikkimese", "Naga", "Manipuri",
+    "Mizo", "Tripuri", "Arunachali", "Meghalayan", "Madhya Pradesh",
+    "Chhattisgarhi"
+]
+
+from typing import List
+
+@router.get("/food-styles", response_model=List[str])
+def get_food_styles():
+    return food_styles
