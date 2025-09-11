@@ -55,3 +55,10 @@ class ReviewCreate(BaseModel):
     taste_rating: int = Field(..., ge=1, le=5)
     portion_rating: int = Field(..., ge=1, le=5)
     review_text: str
+
+
+
+# cart model
+class CartItemRequest(BaseModel):
+    food_id: str
+    quantity: int

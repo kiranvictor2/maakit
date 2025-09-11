@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from routers.user import router as user_router
 from routers.chef import router as chef_router
 from routers.foodstyle import router as food_style_router
+from routers.delivery import router as delivery
 from mongoengine import connect
 
 app = FastAPI()
@@ -20,6 +21,7 @@ app.add_middleware(
 
 # Route registration
 app.include_router(user_router, prefix="/api")
+app.include_router(delivery, prefix="/api")
 app.include_router(chef_router, prefix="/api")
 app.include_router(food_style_router, prefix="/api")
 

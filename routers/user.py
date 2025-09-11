@@ -6,7 +6,7 @@ from models.user import FoodFilter   # adjust path to your actual file
 from database import get_db
 from models.user import UserCreate
 from database import db
-from models.user import LoginRequest,userPhoneCreate,LocationUpdate,ReviewCreate
+from models.user import LoginRequest,userPhoneCreate,LocationUpdate,ReviewCreate,CartItemRequest
 from auth.utils import create_access_token  # ✅ Import token creator
 from datetime import datetime
 
@@ -563,6 +563,331 @@ async def get_food_by_chef(chef_id: str):
         "count": len(food_items),
         "items": grouped_items
     }
+
+
+
+
+
+#--------------------------------------------------------USER CART-------------------------#
+from fastapi.encoders import jsonable_encoder\
+
+def convert_mongo_document(doc):
+    """Recursively convert ObjectId and datetime to strings."""
+    if isinstance(doc, dict):
+        return {k: convert_mongo_document(v) for k, v in doc.items()}
+    elif isinstance(doc, list):
+        return [convert_mongo_document(i) for i in doc]
+    elif isinstance(doc, ObjectId):
+        return str(doc)
+    elif isinstance(doc, datetime):
+        return doc.isoformat()
+    return doc
+
+@router.post("/cart/add")
+async def add_to_cart(item: CartItemRequest, current_user: dict = Depends(get_current_user)):
+    if current_user["role"] != "user":
+        raise HTTPException(status_code=403, detail="Only app users can add to cart")
+    
+    user_id = str(current_user["_id"])
+
+    food_item = await db["food_items"].find_one({"_id": ObjectId(item.food_id)})
+    if not food_item:
+        raise HTTPException(status_code=404, detail="Food item not found")
+
+    cart = await db["carts"].find_one({"user_id": user_id})
+    if not cart:
+        cart = {
+            "user_id": user_id,
+            "items": [],
+            "total_price": 0,
+            "last_update": datetime.utcnow()
+        }
+
+    # Update or insert item
+    for cart_item in cart["items"]:
+        if cart_item["food_id"] == str(food_item["_id"]):
+            cart_item["quantity"] = item.quantity
+            break
+    else:
+        cart["items"].append({
+            "food_id": str(food_item["_id"]),
+            "chef_id": str(food_item["chef_id"]),
+            "food_name": food_item["food_name"],
+            "quantity": item.quantity,
+            "price": food_item["price"],
+        })
+
+    cart["total_price"] = sum(i["price"] * i["quantity"] for i in cart["items"])
+    cart["last_update"] = datetime.utcnow()
+
+    await db["carts"].update_one(
+        {"user_id": user_id},
+        {"$set": cart},
+        upsert=True
+    )
+
+    # ⚡ Refetch the saved cart to include _id field
+    saved_cart = await db["carts"].find_one({"user_id": user_id})
+
+    return {"status": "success", "cart": convert_mongo_document(saved_cart)}
+
+
+#-------------------------------remove cart----------------------#
+@router.post("/cart/remove")
+async def remove_from_cart(item: CartItemRequest, current_user: dict = Depends(get_current_user)):
+    # ✅ Only app users can remove from cart
+    if current_user["role"] != "user":
+        raise HTTPException(status_code=403, detail="Only app users can remove from cart")
+    
+    user_id = str(current_user["_id"])
+
+    # 1️⃣ Fetch user cart
+    cart = await db["carts"].find_one({"user_id": user_id})
+    if not cart or not cart.get("items"):
+        raise HTTPException(status_code=404, detail="Cart is empty")
+
+    # 2️⃣ Find item in cart
+    updated_items = []
+    item_removed = False
+
+    for cart_item in cart["items"]:
+        if cart_item["food_id"] == item.food_id:
+            # If quantity > 1, decrease
+            if cart_item["quantity"] > item.quantity:
+                cart_item["quantity"] -= item.quantity
+                updated_items.append(cart_item)
+            # If equal or less, remove item completely
+            else:
+                item_removed = True
+                continue
+        else:
+            updated_items.append(cart_item)
+
+    if not updated_items and not item_removed:
+        raise HTTPException(status_code=404, detail="Item not found in cart")
+
+    # 3️⃣ Update cart
+    cart["items"] = updated_items
+    cart["total_price"] = sum(i["price"] * i["quantity"] for i in cart["items"])
+    cart["last_update"] = datetime.utcnow()
+
+    # If cart is empty → remove cart completely
+    if not cart["items"]:
+        await db["carts"].delete_one({"user_id": user_id})
+        return {"status": "success", "message": "Cart is now empty"}
+
+    await db["carts"].update_one(
+        {"user_id": user_id},
+        {"$set": cart},
+        upsert=True
+    )
+
+    saved_cart = await db["carts"].find_one({"user_id": user_id})
+
+    return {"status": "success", "cart": convert_mongo_document(saved_cart)}
+
+
+#---------------------------------------------------get cart item-------------------------------#
+@router.get("/cart/me")
+async def get_my_cart(current_user: dict = Depends(get_current_user)):
+    user_id = str(current_user["_id"])  # ensure string
+
+    # ✅ Query with string user_id (not ObjectId)
+    cart = await db["carts"].find_one({"user_id": user_id})
+    if not cart:
+        return {"status": "success", "cart": []}
+
+    # ✅ Convert ObjectIds to strings
+    cart["_id"] = str(cart["_id"])
+    cart["user_id"] = str(cart["user_id"])
+    for item in cart.get("items", []):
+        if "food_id" in item:
+            item["food_id"] = str(item["food_id"])
+
+    return {"status": "success", "cart": cart}
+
+#-----------------------------------------Create Order------------------------------------#
+
+
+@router.post("/orders/create")
+async def create_order(current_user: dict = Depends(get_current_user)):
+    # 1️⃣ Only users can create orders
+    if current_user["role"] != "user":
+        raise HTTPException(status_code=403, detail="Only users can create orders")
+
+    user_id = str(current_user["_id"])
+
+    # 2️⃣ Fetch user's cart
+    cart = await db["carts"].find_one({"user_id": user_id})
+    if not cart or not cart.get("items"):
+        raise HTTPException(status_code=400, detail="Cart is empty")
+
+    # ⚠️ For now assume all items belong to the same chef (later we can split)
+    chef_id = cart["items"][0]["chef_id"]
+
+    # 3️⃣ Create new order
+    order = {
+        "user_id": user_id,
+        "chef_id": chef_id,
+        "items": cart["items"],
+        "total_price": cart["total_price"],
+        "status": "pending",          # waiting for chef
+        "chef_status": "pending",     # chef not responded yet
+        "delivery_status": "pending", # delivery not assigned yet
+        "created_at": datetime.utcnow()
+    }
+
+    result = await db["orders"].insert_one(order)
+    order["_id"] = str(result.inserted_id)
+
+    # 4️⃣ Clear the cart
+    await db["carts"].delete_one({"user_id": user_id})
+
+    return {
+        "status": "success",
+        "message": "Order created successfully",
+        "order": order
+    }
+
+
+#-----------------------------------------Chef orders------------------------------------#
+
+@router.get("/chef/orders")
+async def get_chef_orders(current_user: dict = Depends(get_current_user)):
+    # ✅ Only chefs can see their orders
+    if current_user["role"] != "chef":
+        raise HTTPException(status_code=403, detail="Only chefs can view orders")
+
+    chef_id = str(current_user["_id"])
+
+    # Get all orders for this chef
+    orders_cursor = db["orders"].find({"chef_id": chef_id})
+    orders = await orders_cursor.to_list(length=None)
+
+    # Convert ObjectIds to strings
+    for order in orders:
+        order["_id"] = str(order["_id"])
+        order["user_id"] = str(order["user_id"])
+        order["chef_id"] = str(order["chef_id"])
+
+    return {"status": "success", "orders": orders}
+
+from pydantic import BaseModel
+class ChefResponseRequest(BaseModel):
+    order_id: str
+    response: str  # "accept" or "reject"
+
+@router.post("/orders/chef/response")
+async def chef_response(payload: ChefResponseRequest, current_user: dict = Depends(get_current_user)):
+    if current_user["role"] != "chef":
+        raise HTTPException(status_code=403, detail="Only chefs can respond")
+
+    chef_id = str(current_user["_id"])
+    order_id = payload.order_id
+    response = payload.response.lower()
+
+    order = await db["orders"].find_one({"_id": ObjectId(order_id)})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if str(order["chef_id"]) != chef_id:
+        raise HTTPException(status_code=403, detail="This order does not belong to you")
+    if order["chef_status"] != "pending":
+        raise HTTPException(status_code=400, detail="Order has already been processed")
+    if response not in ["accept", "reject"]:
+        raise HTTPException(status_code=400, detail="Invalid response, must be 'accept' or 'reject'")
+
+    chef_status = "accepted" if response == "accept" else "rejected"
+    status = "chef_accepted" if chef_status == "accepted" else "cancelled"
+
+    await db["orders"].update_one(
+        {"_id": ObjectId(order_id)},
+        {"$set": {"chef_status": chef_status, "status": status}}
+    )
+
+    # ✅ Assign delivery boy only if chef accepted
+    if chef_status == "accepted":
+        chef_obj = await db["chef_user"].find_one({"_id": ObjectId(chef_id)})
+        if chef_obj and chef_obj.get("location"):
+            await assign_delivery_boy(order_id, chef_obj["location"])
+
+    return {
+        "status": "success",
+        "message": f"Order {response}ed successfully",
+        "order_id": order_id,
+        "chef_status": chef_status
+    }
+
+import math
+# Haversine formula to calculate distance between two geo coordinates
+def haversine(lon1, lat1, lon2, lat2):
+    R = 6371000  # Earth radius in meters
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+
+    a = math.sin(dphi/2)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda/2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+
+    return R * c  # distance in meters
+
+
+async def assign_delivery_boy(order_id: str, chef_location: dict, max_distance: int = 5000):
+    print(f"[DEBUG] Starting search for delivery boys for order: {order_id}")
+    print(f"[DEBUG] Chef location: {chef_location}")
+
+    chef_lon, chef_lat = chef_location["coordinates"]
+
+    # Find all online delivery boys within max_distance
+    print(f"[DEBUG] Searching for delivery boys within {max_distance} meters...")
+    delivery_boys_cursor = db["delivery_user"].find({
+        "role": "delivery",   # Only delivery boys
+        "status": False,      # Must be online
+        "location": {
+            "$near": {
+                "$geometry": {"type": "Point", "coordinates": [chef_lon, chef_lat]},
+                "$maxDistance": max_distance
+            }
+        }
+    })
+
+    nearby_delivery_boys = []
+    async for delivery_boy in delivery_boys_cursor:
+        boy_lon, boy_lat = delivery_boy["location"]["coordinates"]
+
+        # Calculate distance using haversine
+        distance = haversine(chef_lon, chef_lat, boy_lon, boy_lat)
+
+        print(f"[DEBUG] Found delivery boy: {delivery_boy['_id']} at {delivery_boy['location']} with distance {distance:.2f} meters")
+
+        nearby_delivery_boys.append({
+            "id": str(delivery_boy["_id"]),
+            "name": delivery_boy.get("name"),
+            "location": delivery_boy.get("location"),
+            "distance_meters": round(distance, 2)
+        })
+
+    if not nearby_delivery_boys:
+        print(f"[DEBUG] No delivery boys found near order {order_id}")
+        return []
+
+    print(f"[DEBUG] Total nearby delivery boys found: {len(nearby_delivery_boys)}")
+    return nearby_delivery_boys
+
+
+async def wait_for_delivery_boy_response(delivery_boy_id: str, order_id: str, timeout: int = 30):
+    """
+    Wait for delivery boy to accept/reject the assignment.
+    Can be implemented with WebSocket messages or polling.
+    """
+    # This is a placeholder for your async waiting logic
+    # Return True if accepted, False if rejected or timed out
+    pass
+
+
+
+
+
 
 
 food_styles = [
