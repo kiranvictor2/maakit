@@ -818,7 +818,20 @@ async def chef_response(payload: ChefResponseRequest, current_user: dict = Depen
     }
 
 import math
-# Haversine formula to calculate distance between two geo coordinates
+from bson import ObjectId
+from motor.motor_asyncio import AsyncIOMotorClient
+
+# MongoDB connection (update with your URI/db name)
+client = AsyncIOMotorClient("mongodb://localhost:27017")
+db = client["maakitchen"]
+
+# Active WebSocket connections (user_id: websocket)
+active_connections = {}
+
+
+# ------------------------------
+# Haversine Distance Function
+# ------------------------------
 def haversine(lon1, lat1, lon2, lat2):
     R = 6371000  # Earth radius in meters
     phi1 = math.radians(lat1)
@@ -826,20 +839,20 @@ def haversine(lon1, lat1, lon2, lat2):
     dphi = math.radians(lat2 - lat1)
     dlambda = math.radians(lon2 - lon1)
 
-    a = math.sin(dphi/2)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda/2)**2
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
     return R * c  # distance in meters
 
 
-async def assign_delivery_boy(order_id: str, chef_location: dict, max_distance: int = 5000):
-    print(f"[DEBUG] Starting search for delivery boys for order: {order_id}")
-    print(f"[DEBUG] Chef location: {chef_location}")
-
+# ------------------------------
+# Find Nearby Delivery Boys
+# ------------------------------
+async def find_nearby_delivery_boys(order_id: str, chef_location: dict, max_distance: int = 5000):
     chef_lon, chef_lat = chef_location["coordinates"]
 
-    # Find all online delivery boys within max_distance
     print(f"[DEBUG] Searching for delivery boys within {max_distance} meters...")
+
     delivery_boys_cursor = db["delivery_user"].find({
         "role": "delivery",   # Only delivery boys
         "status": False,      # Must be online
@@ -855,10 +868,10 @@ async def assign_delivery_boy(order_id: str, chef_location: dict, max_distance: 
     async for delivery_boy in delivery_boys_cursor:
         boy_lon, boy_lat = delivery_boy["location"]["coordinates"]
 
-        # Calculate distance using haversine
         distance = haversine(chef_lon, chef_lat, boy_lon, boy_lat)
 
-        print(f"[DEBUG] Found delivery boy: {delivery_boy['_id']} at {delivery_boy['location']} with distance {distance:.2f} meters")
+        print(f"[DEBUG] Found delivery boy {delivery_boy['_id']} at {delivery_boy['location']} "
+              f"with distance {distance:.2f} meters")
 
         nearby_delivery_boys.append({
             "id": str(delivery_boy["_id"]),
@@ -867,22 +880,44 @@ async def assign_delivery_boy(order_id: str, chef_location: dict, max_distance: 
             "distance_meters": round(distance, 2)
         })
 
-    if not nearby_delivery_boys:
-        print(f"[DEBUG] No delivery boys found near order {order_id}")
-        return []
-
-    print(f"[DEBUG] Total nearby delivery boys found: {len(nearby_delivery_boys)}")
     return nearby_delivery_boys
 
 
-async def wait_for_delivery_boy_response(delivery_boy_id: str, order_id: str, timeout: int = 30):
-    """
-    Wait for delivery boy to accept/reject the assignment.
-    Can be implemented with WebSocket messages or polling.
-    """
-    # This is a placeholder for your async waiting logic
-    # Return True if accepted, False if rejected or timed out
-    pass
+# ------------------------------
+# Send Order Request to Delivery Boy
+# ------------------------------
+async def send_order_request(delivery_boy_id: str, order_id: str):
+    if delivery_boy_id in active_connections:
+        ws = active_connections[delivery_boy_id]
+        await ws.send_json({
+            "type": "order_request",
+            "order_id": order_id,
+            "message": "New delivery request assigned to you!"
+        })
+        print(f"[DEBUG] Sent order request to delivery boy {delivery_boy_id}")
+    else:
+        print(f"[DEBUG] Delivery boy {delivery_boy_id} not connected via WebSocket")
+
+
+# ------------------------------
+# Assign Delivery Boy
+# ------------------------------
+async def assign_delivery_boy(order_id: str, chef_location: dict, max_distance: int = 5000):
+    print(f"[DEBUG] Starting assignment for order: {order_id}")
+    print(f"[DEBUG] Chef location: {chef_location}")
+
+    nearby_delivery_boys = await find_nearby_delivery_boys(order_id, chef_location, max_distance)
+
+    if not nearby_delivery_boys:
+        print(f"[DEBUG] No delivery boys found near order {order_id}")
+        return {"message": "No delivery boys available"}
+
+    # Send request to all nearby delivery boys (broadcast)
+    for boy in nearby_delivery_boys:
+        await send_order_request(boy["id"], order_id)
+
+    print(f"[DEBUG] Request sent to {len(nearby_delivery_boys)} delivery boys")
+    return {"message": f"Request sent to {len(nearby_delivery_boys)} delivery boys"}
 
 
 
