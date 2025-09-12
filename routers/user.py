@@ -6,10 +6,12 @@ from models.user import FoodFilter   # adjust path to your actual file
 from database import get_db
 from models.user import UserCreate
 from database import db
-from models.user import LoginRequest,userPhoneCreate,LocationUpdate,ReviewCreate,CartItemRequest
+from models.user import LoginRequest,userPhoneCreate,LocationUpdate,ReviewCreate,CartItemRequest,Address
 from auth.utils import create_access_token  # ✅ Import token creator
 from datetime import datetime
 import asyncio
+import uuid
+
 router = APIRouter()
 
 @router.post("/users")
@@ -706,41 +708,123 @@ async def get_my_cart(current_user: dict = Depends(get_current_user)):
 
     return {"status": "success", "cart": cart}
 
-#-----------------------------------------Create Order------------------------------------#
 
+#-----------------------------------------Address---------------------------------------#
+# -------------------
+# Add a new address
+# -------------------
+@router.post("/user/address")
+async def add_address(address: Address, current_user: dict = Depends(get_current_user)):
+    user_id = str(current_user["_id"])
+    address.user_id = user_id
+
+    # If this address is default, unset other default addresses
+    if address.is_default:
+        await db["addresses"].update_many(
+            {"user_id": user_id, "is_default": True},
+            {"$set": {"is_default": False}}
+        )
+
+    address_dict = address.dict()
+    address_dict["id"] = str(uuid.uuid4())
+    result = await db["addresses"].insert_one(address_dict)
+    address_dict["_id"] = str(result.inserted_id)
+
+    return {"status": "success", "address": address_dict}
+
+# -------------------
+# Get all addresses
+# -------------------
+@router.get("/user/address")
+async def get_addresses(current_user: dict = Depends(get_current_user)):
+    user_id = str(current_user["_id"])
+    addresses = await db["addresses"].find({"user_id": user_id}).to_list(100)
+
+    # Convert MongoDB ObjectId to string
+    for addr in addresses:
+        addr["_id"] = str(addr["_id"])
+
+    return {"addresses": addresses}
+
+# -------------------
+# Update address
+# -------------------
+@router.put("/user/address/{address_id}")
+async def update_address(address_id: str, address: Address, current_user: dict = Depends(get_current_user)):
+    user_id = str(current_user["_id"])
+    
+    # If setting this address as default, unset others
+    if address.is_default:
+        await db["addresses"].update_many(
+            {"user_id": user_id, "is_default": True},
+            {"$set": {"is_default": False}}
+        )
+
+    update_result = await db["addresses"].update_one(
+        {"id": address_id, "user_id": user_id},
+        {"$set": address.dict(exclude={"user_id"})}
+    )
+
+    if update_result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Address not found")
+
+    return {"status": "success"}
+
+# -------------------
+# Delete address
+# -------------------
+@router.delete("/user/address/{address_id}")
+async def delete_address(address_id: str, current_user: dict = Depends(get_current_user)):
+    user_id = str(current_user["_id"])
+    delete_result = await db["addresses"].delete_one({"id": address_id, "user_id": user_id})
+
+    if delete_result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Address not found")
+
+    return {"status": "success"}
+
+
+#-----------------------------------------Create Order------------------------------------#
 
 @router.post("/orders/create")
 async def create_order(current_user: dict = Depends(get_current_user)):
-    # 1️⃣ Only users can create orders
     if current_user["role"] != "user":
         raise HTTPException(status_code=403, detail="Only users can create orders")
 
     user_id = str(current_user["_id"])
 
-    # 2️⃣ Fetch user's cart
+    # Fetch user's cart
     cart = await db["carts"].find_one({"user_id": user_id})
     if not cart or not cart.get("items"):
         raise HTTPException(status_code=400, detail="Cart is empty")
 
-    # ⚠️ For now assume all items belong to the same chef (later we can split)
-    chef_id = cart["items"][0]["chef_id"]
+    # Fetch the default address
+    address = await db["addresses"].find_one({"user_id": user_id, "is_default": True})
+    if not address:
+        raise HTTPException(status_code=404, detail="No default address found")
 
-    # 3️⃣ Create new order
+    # Convert ObjectId to string
+    address["_id"] = str(address["_id"])
+
+    chef_id = cart["items"][0]["chef_id"]  # assume same chef for all items
+
+    # Create new order
     order = {
         "user_id": user_id,
         "chef_id": chef_id,
         "items": cart["items"],
         "total_price": cart["total_price"],
-        "status": "pending",          # waiting for chef
-        "chef_status": "pending",     # chef not responded yet
-        "delivery_status": "pending", # delivery not assigned yet
+        "address": address,          # include the default address
+        "status": "pending",
+        "chef_status": "pending",
+        "delivery_status": "pending",
         "created_at": datetime.utcnow()
     }
 
     result = await db["orders"].insert_one(order)
     order["_id"] = str(result.inserted_id)
 
-    # 4️⃣ Clear the cart
+    # Clear the cart
     await db["carts"].delete_one({"user_id": user_id})
 
     return {

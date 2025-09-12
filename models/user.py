@@ -57,6 +57,15 @@ class ReviewCreate(BaseModel):
     review_text: str
 
 
+class Address(BaseModel):
+    user_id: str  # Link to the user
+    label: str
+    flat_no: str
+    landmark: str
+    area: str
+    coordinates: list  # [lon, lat]
+    is_default: bool = False
+
 
 # cart model
 class CartItemRequest(BaseModel):
