@@ -9,7 +9,7 @@ from routers.delivery import router as delivery
 from mongoengine import connect
 
 app = FastAPI()
-connect(db="maakitchen", host="mongodb://localhost:27017")
+connect(db="maakitchen", host="mongodb://13.204.84.41:27017")
 # Allow CORS for frontend
 app.add_middleware(
     CORSMiddleware,

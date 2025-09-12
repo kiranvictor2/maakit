@@ -1,5 +1,5 @@
 # routers/user.py
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 from bson import ObjectId
 from auth.jwt_handler import get_current_user
 from models.user import FoodFilter   # adjust path to your actual file
@@ -9,7 +9,7 @@ from database import db
 from models.user import LoginRequest,userPhoneCreate,LocationUpdate,ReviewCreate,CartItemRequest
 from auth.utils import create_access_token  # ✅ Import token creator
 from datetime import datetime
-
+import asyncio
 router = APIRouter()
 
 @router.post("/users")
@@ -779,6 +779,7 @@ class ChefResponseRequest(BaseModel):
 
 @router.post("/orders/chef/response")
 async def chef_response(payload: ChefResponseRequest, current_user: dict = Depends(get_current_user)):
+    # Check if the user is a chef
     if current_user["role"] != "chef":
         raise HTTPException(status_code=403, detail="Only chefs can respond")
 
@@ -786,6 +787,7 @@ async def chef_response(payload: ChefResponseRequest, current_user: dict = Depen
     order_id = payload.order_id
     response = payload.response.lower()
 
+    # Fetch the order
     order = await db["orders"].find_one({"_id": ObjectId(order_id)})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
@@ -796,6 +798,7 @@ async def chef_response(payload: ChefResponseRequest, current_user: dict = Depen
     if response not in ["accept", "reject"]:
         raise HTTPException(status_code=400, detail="Invalid response, must be 'accept' or 'reject'")
 
+    # Update chef_status and overall status
     chef_status = "accepted" if response == "accept" else "rejected"
     status = "chef_accepted" if chef_status == "accepted" else "cancelled"
 
@@ -804,11 +807,17 @@ async def chef_response(payload: ChefResponseRequest, current_user: dict = Depen
         {"$set": {"chef_status": chef_status, "status": status}}
     )
 
-    # ✅ Assign delivery boy only if chef accepted
+    # Assign delivery boy if chef accepted
     if chef_status == "accepted":
         chef_obj = await db["chef_user"].find_one({"_id": ObjectId(chef_id)})
         if chef_obj and chef_obj.get("location"):
-            await assign_delivery_boy(order_id, chef_obj["location"])
+            # Set delivery_status to pending_assignment
+            await db["orders"].update_one(
+                {"_id": ObjectId(order_id)},
+                {"$set": {"delivery_status": "pending_assignment"}}
+            )
+            # Fire-and-forget async assignment to nearby delivery boys
+            asyncio.create_task(assign_order(order_id, chef_obj["location"]))
 
     return {
         "status": "success",
@@ -816,17 +825,16 @@ async def chef_response(payload: ChefResponseRequest, current_user: dict = Depen
         "order_id": order_id,
         "chef_status": chef_status
     }
-
 import math
-from bson import ObjectId
-from motor.motor_asyncio import AsyncIOMotorClient
 
-# MongoDB connection (update with your URI/db name)
-client = AsyncIOMotorClient("mongodb://localhost:27017")
-db = client["maakitchen"]
-
-# Active WebSocket connections (user_id: websocket)
+# Active WebSocket connections (delivery_boy_id: websocket)
 active_connections = {}
+# Shared responses (order_id -> delivery_boy_id -> response)
+delivery_responses = {}  # Example: {"order123": {"boy1": "accept", "event": asyncio.Event()}}
+
+# MongoDB collections
+delivery_user = db["delivery_user"]
+orders_collection = db["orders"]
 
 
 # ------------------------------
@@ -848,14 +856,12 @@ def haversine(lon1, lat1, lon2, lat2):
 # ------------------------------
 # Find Nearby Delivery Boys
 # ------------------------------
-async def find_nearby_delivery_boys(order_id: str, chef_location: dict, max_distance: int = 5000):
+async def find_nearby_delivery_boys(chef_location: dict, max_distance: int = 5000):
     chef_lon, chef_lat = chef_location["coordinates"]
 
-    print(f"[DEBUG] Searching for delivery boys within {max_distance} meters...")
-
     delivery_boys_cursor = db["delivery_user"].find({
-        "role": "delivery",   # Only delivery boys
-        "status": False,      # Must be online
+        "role": "delivery",
+        "status": True,  # must be online
         "location": {
             "$near": {
                 "$geometry": {"type": "Point", "coordinates": [chef_lon, chef_lat]},
@@ -867,11 +873,7 @@ async def find_nearby_delivery_boys(order_id: str, chef_location: dict, max_dist
     nearby_delivery_boys = []
     async for delivery_boy in delivery_boys_cursor:
         boy_lon, boy_lat = delivery_boy["location"]["coordinates"]
-
         distance = haversine(chef_lon, chef_lat, boy_lon, boy_lat)
-
-        print(f"[DEBUG] Found delivery boy {delivery_boy['_id']} at {delivery_boy['location']} "
-              f"with distance {distance:.2f} meters")
 
         nearby_delivery_boys.append({
             "id": str(delivery_boy["_id"]),
@@ -882,48 +884,121 @@ async def find_nearby_delivery_boys(order_id: str, chef_location: dict, max_dist
 
     return nearby_delivery_boys
 
+# ------------------------------
+# Assign Order with Retry
+# ------------------------------
+async def assign_order(order_id: str, chef_location: dict, max_distance: int = 5000, timeout: int = 30):
+    nearby_delivery_boys = await find_nearby_delivery_boys(chef_location, max_distance)
 
-# ------------------------------
-# Send Order Request to Delivery Boy
-# ------------------------------
-async def send_order_request(delivery_boy_id: str, order_id: str):
-    if delivery_boy_id in active_connections:
+    if not nearby_delivery_boys:
+        print(f"[DEBUG] No delivery boys available for order {order_id}")
+        return
+
+    if order_id not in delivery_responses:
+        delivery_responses[order_id] = {"event": asyncio.Event()}
+
+    for boy in nearby_delivery_boys:
+        delivery_boy_id = boy["id"]
+        if delivery_boy_id not in active_connections:
+            continue  # skip offline
+
         ws = active_connections[delivery_boy_id]
+
+        # Send order request
         await ws.send_json({
             "type": "order_request",
             "order_id": order_id,
             "message": "New delivery request assigned to you!"
         })
-        print(f"[DEBUG] Sent order request to delivery boy {delivery_boy_id}")
-    else:
-        print(f"[DEBUG] Delivery boy {delivery_boy_id} not connected via WebSocket")
+        print(f"[DEBUG] Sent order request to {delivery_boy_id}")
 
+        try:
+            # Wait until delivery boy responds or timeout
+            delivery_responses[order_id]["event"].clear()
+            try:
+                await asyncio.wait_for(delivery_responses[order_id]["event"].wait(), timeout=timeout)
+            except asyncio.TimeoutError:
+                print(f"[DEBUG] Delivery boy {delivery_boy_id} did not respond in {timeout}s")
+                continue  # try next nearby delivery boy
+
+            # Check response
+            response = delivery_responses[order_id].get(delivery_boy_id)
+            if response == "accept":
+                await orders_collection.update_one(
+                    {"_id": ObjectId(order_id)},
+                    {"$set": {
+                        "delivery_boy_id": delivery_boy_id,
+                        "delivery_status": "assigned",
+                        "accepted_at": datetime.utcnow()
+                    }}
+                )
+                print(f"[DEBUG] Order {order_id} assigned to {delivery_boy_id}")
+                await ws.send_json({"type": "order_status", "order_id": order_id, "status": "accepted"})
+                return
+            else:
+                print(f"[DEBUG] Delivery boy {delivery_boy_id} rejected order {order_id}")
+                continue  # next boy
+
+        except WebSocketDisconnect:
+            print(f"[DEBUG] Delivery boy {delivery_boy_id} disconnected")
+            if delivery_boy_id in active_connections:
+                del active_connections[delivery_boy_id]
+            continue
+
+    print(f"[DEBUG] No delivery boy accepted order {order_id}")
+    await orders_collection.update_one(
+        {"_id": ObjectId(order_id)},
+        {"$set": {"delivery_status": "unassigned"}}
+    )
 
 # ------------------------------
-# Assign Delivery Boy
+# Delivery Boy WebSocket
 # ------------------------------
-async def assign_delivery_boy(order_id: str, chef_location: dict, max_distance: int = 5000):
-    print(f"[DEBUG] Starting assignment for order: {order_id}")
-    print(f"[DEBUG] Chef location: {chef_location}")
+@router.websocket("/ws/delivery/{delivery_boy_id}")
+async def delivery_boy_ws(websocket: WebSocket, delivery_boy_id: str):
+    await websocket.accept()
+    active_connections[delivery_boy_id] = websocket
+    print(f"[DEBUG] Delivery boy {delivery_boy_id} connected")
 
-    nearby_delivery_boys = await find_nearby_delivery_boys(order_id, chef_location, max_distance)
+    # Mark online in DB
+    await delivery_user.update_one(
+        {"_id": ObjectId(delivery_boy_id)},
+        {"$set": {"status": True, "last_update": datetime.utcnow()}}
+    )
 
-    if not nearby_delivery_boys:
-        print(f"[DEBUG] No delivery boys found near order {order_id}")
-        return {"message": "No delivery boys available"}
+    try:
+        while True:
+            data = await websocket.receive_json()
+            print(f"[DEBUG] Received from {delivery_boy_id}: {data}")
 
-    # Send request to all nearby delivery boys (broadcast)
-    for boy in nearby_delivery_boys:
-        await send_order_request(boy["id"], order_id)
+            if data.get("type") == "order_response":
+                order_id = data.get("order_id")
+                response = data.get("response")  # "accept" or "reject"
 
-    print(f"[DEBUG] Request sent to {len(nearby_delivery_boys)} delivery boys")
-    return {"message": f"Request sent to {len(nearby_delivery_boys)} delivery boys"}
+                # Store response
+                if order_id not in delivery_responses:
+                    delivery_responses[order_id] = {"event": asyncio.Event()}
 
+                delivery_responses[order_id][delivery_boy_id] = response
+                # Notify the assign_order task
+                delivery_responses[order_id]["event"].set()
 
+                # Send confirmation back to delivery boy
+                await websocket.send_json({
+                    "type": "order_status",
+                    "order_id": order_id,
+                    "status": response
+                })
 
-
-
-
+    except WebSocketDisconnect:
+        print(f"[DEBUG] Delivery boy {delivery_boy_id} disconnected")
+        if delivery_boy_id in active_connections:
+            del active_connections[delivery_boy_id]
+        # Mark offline
+        await delivery_user.update_one(
+            {"_id": ObjectId(delivery_boy_id)},
+            {"$set": {"status": False, "last_update": datetime.utcnow()}}
+        )
 
 food_styles = [
     "Andhra", "Telangana", "Karnataka", "Maharashtrian", "Tamil Nadu",
