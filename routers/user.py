@@ -434,7 +434,7 @@ async def add_review(
     review: ReviewCreate,
     current_user: dict = Depends(get_current_user)
 ):
-    user_id = current_user["sub"]
+    user_id = current_user["_id"]
 
     review_doc = {
         "user_id": ObjectId(user_id),
