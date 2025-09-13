@@ -70,7 +70,7 @@ async def update_location(
     current_user: dict = Depends(get_current_user)
 ):
     # safer: use sub instead of _id
-    user_id = current_user.get("sub")  
+    user_id = current_user.get("_id")  
 
     result = await db["app_user"].update_one(
         {"_id": ObjectId(user_id)},
@@ -285,7 +285,7 @@ async def get_nearby_chefs(
     max_distance_m: int = 5000,  # default 5 km
     current_user: dict = Depends(get_current_user)
 ):
-    user_id = current_user["sub"]
+    user_id = current_user["_id"]
 
     # 1️⃣ Get current user location
     user = await db["app_user"].find_one({"_id": ObjectId(user_id)})
@@ -335,7 +335,7 @@ async def get_nearby_chef_food(
     max_distance_m: int = 5000,  # default 5 km
     current_user: dict = Depends(get_current_user)
 ):
-    user_id = current_user["sub"]
+    user_id = current_user["_id"]
 
     # 1️⃣ Get current user location
     user = await db["app_user"].find_one({"_id": ObjectId(user_id)})
