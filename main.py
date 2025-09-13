@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
+from fastapi.staticfiles import StaticFiles
 # Routers
 from routers.user import router as user_router
 from routers.chef import router as chef_router
@@ -9,6 +9,8 @@ from routers.delivery import router as delivery
 from mongoengine import connect
 
 app = FastAPI()
+# Mount "uploads" folder
+app.mount("/static", StaticFiles(directory="uploads"), name="static")
 connect(db="maakitchen", host="mongodb://13.204.84.41:27017")
 # Allow CORS for frontend
 app.add_middleware(

@@ -1,7 +1,9 @@
 # routers/chef.py
 from fastapi import APIRouter, HTTPException,Depends
-from bson import ObjectId
+from fastapi.responses import FileResponse
 
+from bson import ObjectId
+from typing import List, Optional
 from models.chef import ChefCreate
 from database import db
 from models.chef import ChefLoginRequest,ChefPhoneCreate,LocationUpdate
@@ -102,10 +104,10 @@ from fastapi import APIRouter, UploadFile, File, Form, Depends
 import os
 import uuid
 
-UPLOAD_FOLDER = "uploads"  # local folder name
+UPLOAD_FOLDER = "uploads/chefprofile"  # folder for chef profile images
 
 def save_image_and_get_url(contents: bytes, filename: str = None) -> str:
-    # Make sure the folder exists
+    # Make sure folder exists
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
     # Create unique filename
@@ -117,23 +119,30 @@ def save_image_and_get_url(contents: bytes, filename: str = None) -> str:
     with open(filepath, "wb") as f:
         f.write(contents)
 
-    # Return URL (adjust based on your deployment)
-    return f"/static/{unique_name}"  # FastAPI static route
+    # Return URL relative to static mount
+    return f"/static/chefprofile/{unique_name}"
 
-from fastapi import Form, File, UploadFile
+@router.get("/chef/profile/image/{filename}")
+async def get_profile_image(filename: str):
+    file_path = os.path.join(UPLOAD_FOLDER, filename)
+    if not os.path.exists(file_path):
+        return {"error": "Image not found"}
+    return FileResponse(file_path)
+
+
 
 @router.post("/chef/profile/update")
 async def update_chef_profile(
-    name: str = Form(None),
-    email: str = Form(None),
-    native_place: str = Form(None),
-    aadhar_number: str = Form(None),
-    food_styles: list[str] = Form(None),
-    file: UploadFile = File(None),
+    name: Optional[str] = Form(None),
+    email: Optional[str] = Form(None),
+    native_place: Optional[str] = Form(None),
+    aadhar_number: Optional[str] = Form(None),
+    food_styles: Optional[List[str]] = Form(None),
+    file: Optional[UploadFile] = File(None),
     current_user: dict = Depends(get_current_user)
 ):
     print("Current user:", current_user)
-    user_id = current_user["sub"]
+    user_id = current_user["_id"]
 
     update_data = {}
 
@@ -147,7 +156,7 @@ async def update_chef_profile(
         update_data["aadhar_number"] = aadhar_number
     if food_styles:
         update_data["food_styles"] = food_styles
-    if file:
+    if file is not None:  # only if file uploaded
         contents = await file.read()
         photo_url = save_image_and_get_url(contents, file.filename)
         update_data["photo_url"] = photo_url
@@ -158,7 +167,7 @@ async def update_chef_profile(
             {"$set": update_data}
         )
 
-    return {"message": "Profile updated successfully"}
+    return {"message": "Profile updated successfully", "updated": update_data}
 
 #======================add iten ------------------
 
