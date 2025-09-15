@@ -69,7 +69,7 @@ async def update_chef_location(
     location: LocationUpdate, 
     current_user: dict = Depends(get_current_user)
 ):
-    chef_id = current_user.get("sub")
+    chef_id = current_user.get("_id")
     
     result = await db["chef_user"].update_one(
         {"_id": ObjectId(chef_id)},
