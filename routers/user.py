@@ -1085,12 +1085,37 @@ async def delivery_boy_ws(websocket: WebSocket, delivery_boy_id: str):
         )
 
 food_styles = [
-    "Andhra", "Telangana", "Karnataka", "Maharashtrian", "Tamil Nadu",
-    "Kerala", "Bengali", "Punjabi", "Rajasthani", "Gujarati", "Goan",
-    "Kashmiri", "Odia", "Assamese", "Sikkimese", "Naga", "Manipuri",
-    "Mizo", "Tripuri", "Arunachali", "Meghalayan", "Madhya Pradesh",
-    "Chhattisgarhi"
+    "Andhra Style",
+    "Arunachal Pradesh Style",
+    "Assam Style",
+    "Bihar Style",
+    "Chattisgarh Style",
+    "Delhi Style",
+    "Goa Style",
+    "Gujarat Style",
+    "Haryana Style",
+    "Himachal Pradesh Style",
+    "Jammu Kashmir Style",
+    "Jharkhand Style",
+    "Karnataka Style",
+    "Kerala Style",
+    "Madhya Pradesh Style",
+    "Maharastrian Style",
+    "Meghalaya Style",
+    "Mizoram Style",
+    "Nagaland Style",
+    "Orissa Style",
+    "Punjabi Style",
+    "Rajasthan Style",
+    "Sikkim Style",
+    "Tamilian Style",
+    "Telangana Style",
+    "Tripura Style",
+    "Uttrakhand Style",
+    "Uttar Pradesh Style",
+    "West Bengal Style"
 ]
+
 
 from typing import List
 
