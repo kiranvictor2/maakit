@@ -225,7 +225,7 @@ async def add_food_item(
     photo: UploadFile = File(...),
     current_user: dict = Depends(get_current_user)
 ):
-    chef_id = current_user["sub"]
+    chef_id = current_user["_id"]
 
     contents = await photo.read()
     photo_url = save_image_and_get_url(contents, photo.filename)
