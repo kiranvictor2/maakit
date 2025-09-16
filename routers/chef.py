@@ -171,37 +171,46 @@ async def update_chef_profile(
 
 #======================add iten ------------------
 
+
 # Food styles Enum
 class FoodStyleEnum(str, Enum):
-    Andhra = "Andhra"
-    Telangana = "Telangana"
-    Karnataka = "Karnataka"
-    Maharashtrian = "Maharashtrian"
-    Tamil_Nadu = "Tamil Nadu"
-    Kerala = "Kerala"
-    Bengali = "Bengali"
-    Punjabi = "Punjabi"
-    Rajasthani = "Rajasthani"
-    Gujarati = "Gujarati"
-    Goan = "Goan"
-    Kashmiri = "Kashmiri"
-    Odia = "Odia"
-    Assamese = "Assamese"
-    Sikkimese = "Sikkimese"
-    Naga = "Naga"
-    Manipuri = "Manipuri"
-    Mizo = "Mizo"
-    Tripuri = "Tripuri"
-    Arunachali = "Arunachali"
-    Meghalayan = "Meghalayan"
-    Madhya_Pradesh = "Madhya Pradesh"
-    Chhattisgarhi = "Chhattisgarhi"
+    Andhra = "Andhra Style"
+    Arunachal_Pradesh = "Arunachal Pradesh Style"
+    Assam = "Assam Style"
+    Bihar = "Bihar Style"
+    Chattisgarh = "Chattisgarh Style"
+    Delhi = "Delhi Style"
+    Goa = "Goa Style"
+    Gujarat = "Gujarat Style"
+    Haryana = "Haryana Style"
+    Himachal_Pradesh = "Himachal Pradesh Style"
+    Jammu_Kashmir = "Jammu Kashmir Style"
+    Jharkhand = "Jharkhand Style"
+    Karnataka = "Karnataka Style"
+    Kerala = "Kerala Style"
+    Madhya_Pradesh = "Madhya Pradesh Style"
+    Maharastrian = "Maharastrian Style"
+    Meghalaya = "Meghalaya Style"
+    Mizoram = "Mizoram Style"
+    Nagaland = "Nagaland Style"
+    Orissa = "Orissa Style"
+    Punjabi = "Punjabi Style"
+    Rajasthan = "Rajasthan Style"
+    Sikkim = "Sikkim Style"
+    Tamilian = "Tamilian Style"
+    Telangana = "Telangana Style"
+    Tripura = "Tripura Style"
+    Uttrakhand = "Uttrakhand Style"
+    Uttar_Pradesh = "Uttar Pradesh Style"
+    West_Bengal = "West Bengal Style"
+
 
 # Service type Enum
 class ServiceTypeEnum(str, Enum):
     Breakfast = "Breakfast"
     Lunch = "Lunch"
     Dinner = "Dinner"
+
 
 # Updated endpoint
 @router.post("/chef/item/add")
