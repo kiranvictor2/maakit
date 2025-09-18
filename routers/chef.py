@@ -246,6 +246,61 @@ async def add_food_item(
 
     return {"message": "Food item added", "item_id": str(result.inserted_id)}
 
+@router.put("/chef/item/update/{item_id}")
+async def update_food_item(
+    item_id: str,
+    food_name: str = Form(...),
+    food_style: str = Form(...),
+    service_type: str = Form(...),
+    food_type: str = Form(...),
+    quantity: int = Form(...),
+    price: float = Form(...),
+    off: float = Form(...),
+    photo: UploadFile = File(None),  # Make it optional
+    current_user: dict = Depends(get_current_user)
+):
+    food_item = await db["food_items"].find_one({"_id": ObjectId(item_id)})
+
+    if not food_item:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    update_data = {
+        "food_name": food_name,
+        "food_style": food_style,
+        "food_type": food_type,
+        "quantity": quantity,
+        "price": price,
+        "off": off,
+        "service_type": service_type
+    }
+
+    if photo:
+        contents = await photo.read()
+        photo_url = save_image_and_get_url(contents, photo.filename)
+        update_data["photo_url"] = photo_url
+
+    await db["food_items"].update_one(
+        {"_id": ObjectId(item_id)},
+        {"$set": update_data}
+    )
+
+    return {"message": "Item updated successfully"}
+
+# Delete food item
+@router.delete("/chef/item/delete/{item_id}")
+async def delete_food_item(item_id: str, current_user: dict = Depends(get_current_user)):
+    chef_id = current_user["_id"]
+
+    # Check if the item exists and belongs to the current chef
+    existing_item = await db["food_items"].find_one({"_id": ObjectId(item_id), "chef_id": ObjectId(chef_id)})
+    if not existing_item:
+        raise HTTPException(status_code=404, detail="Food item not found")
+
+    # Delete the item
+    await db["food_items"].delete_one({"_id": ObjectId(item_id), "chef_id": ObjectId(chef_id)})
+
+    return {"message": "Food item deleted successfully", "item_id": item_id}
+
 #-----------------------------------My food items---------------------------#
 @router.get("/chef/items")
 async def get_my_food_items(current_user: dict = Depends(get_current_user)):
@@ -267,3 +322,77 @@ async def get_my_food_items(current_user: dict = Depends(get_current_user)):
         })
 
     return {"items": items}
+
+
+
+
+#-----------myorders------------------#
+def convert_object_ids(orders: list):
+    """Convert all ObjectId fields to strings for JSON serialization."""
+    for o in orders:
+        o["_id"] = str(o["_id"])
+        for item in o.get("items", []):
+            if "_id" in item:
+                item["_id"] = str(item["_id"])
+        if "address" in o and "_id" in o["address"]:
+            o["address"]["_id"] = str(o["address"]["_id"])
+    return orders
+
+
+@router.get("/chef/orders/incoming")
+async def get_incoming_orders(current_user: dict = Depends(get_current_user)):
+    if current_user["role"] != "chef":
+        raise HTTPException(status_code=403, detail="Only chefs can view orders")
+    chef_id = str(current_user["_id"])
+    orders = await db["orders"].find({"chef_id": chef_id, "status": {"$in": ["new", "pending"]}}).to_list(length=None)
+    print(orders)
+    return {"status": "success", "orders": convert_object_ids(orders)}
+
+
+@router.get("/chef/orders/ongoing")
+async def get_ongoing_orders(current_user: dict = Depends(get_current_user)):
+    if current_user["role"] != "chef":
+        raise HTTPException(status_code=403, detail="Only chefs can view orders")
+
+    chef_id = str(current_user["_id"])
+    
+    # Fetch ongoing orders
+    orders = await db["orders"].find({
+        "chef_id": chef_id,
+        "status": {"$in": ["chef_accepted", "preparing", "ready"]}
+    }).to_list(length=None)
+
+    # Fetch user details for each order
+    for order in orders:
+        user_id = order.get("user_id")
+        if user_id:
+            user = await db["app_user"].find_one({"_id": ObjectId(user_id)})
+            if user:
+                order["user_details"] = {
+                    "phone_number": user.get("phone_number"),
+                    "role": user.get("role"),
+                    "is_online": user.get("is_online"),
+                    "last_seen": user.get("last_seen"),
+                    "created_at": user.get("created_at"),
+                    "location": user.get("location")
+                }
+
+    return {"status": "success", "orders": convert_object_ids(orders)}
+
+
+@router.get("/chef/orders/completed")
+async def get_completed_orders(current_user: dict = Depends(get_current_user)):
+    if current_user["role"] != "chef":
+        raise HTTPException(status_code=403, detail="Only chefs can view orders")
+    chef_id = str(current_user["_id"])
+    orders = await db["orders"].find({"chef_id": chef_id, "status": {"$in": ["completed", "delivered"]}}).to_list(length=None)
+    return {"status": "success", "orders": convert_object_ids(orders)}
+
+
+@router.get("/chef/orders/all")
+async def get_all_orders(current_user: dict = Depends(get_current_user)):
+    if current_user["role"] != "chef":
+        raise HTTPException(status_code=403, detail="Only chefs can view orders")
+    chef_id = str(current_user["_id"])
+    orders = await db["orders"].find({"chef_id": chef_id}).to_list(length=None)
+    return {"status": "success", "orders": convert_object_ids(orders)}

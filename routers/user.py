@@ -834,27 +834,7 @@ async def create_order(current_user: dict = Depends(get_current_user)):
     }
 
 
-#-----------------------------------------Chef orders------------------------------------#
 
-@router.get("/chef/orders")
-async def get_chef_orders(current_user: dict = Depends(get_current_user)):
-    # ✅ Only chefs can see their orders
-    if current_user["role"] != "chef":
-        raise HTTPException(status_code=403, detail="Only chefs can view orders")
-
-    chef_id = str(current_user["_id"])
-
-    # Get all orders for this chef
-    orders_cursor = db["orders"].find({"chef_id": chef_id})
-    orders = await orders_cursor.to_list(length=None)
-
-    # Convert ObjectIds to strings
-    for order in orders:
-        order["_id"] = str(order["_id"])
-        order["user_id"] = str(order["user_id"])
-        order["chef_id"] = str(order["chef_id"])
-
-    return {"status": "success", "orders": orders}
 
 from pydantic import BaseModel
 class ChefResponseRequest(BaseModel):
