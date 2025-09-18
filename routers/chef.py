@@ -246,4 +246,24 @@ async def add_food_item(
 
     return {"message": "Food item added", "item_id": str(result.inserted_id)}
 
+#-----------------------------------My food items---------------------------#
+@router.get("/chef/items")
+async def get_my_food_items(current_user: dict = Depends(get_current_user)):
+    chef_id = current_user["_id"]
 
+    items_cursor = db["food_items"].find({"chef_id": ObjectId(chef_id)})
+    items = []
+    async for item in items_cursor:
+        items.append({
+            "id": str(item["_id"]),
+            "food_name": item["food_name"],
+            "food_style": item["food_style"],
+            "service_type": item["service_type"],
+            "food_type": item["food_type"],
+            "quantity": item["quantity"],
+            "price": item["price"],
+            "off": item["off"],
+            "photo_url": item["photo_url"]
+        })
+
+    return {"items": items}
