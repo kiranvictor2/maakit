@@ -35,11 +35,55 @@ async def create_or_get_chef(chef: ChefPhoneCreate):
     }
 
 
+# @router.post("/chef/login")
+# async def login_chef(data: ChefLoginRequest):
+#     chef = await db["chef_user"].find_one({"phone_number": data.phone_number})
+#     if not chef:
+#         raise HTTPException(status_code=404, detail="Chef not found")
+
+#     token_data = {
+#         "sub": str(chef["_id"]),
+#         "phone_number": chef["phone_number"],
+#         "role": "chef"
+#     }
+#     access_token = create_access_token(data=token_data)
+
+#     return {
+#         "message": "Login successful",
+#         "access_token": access_token,
+#         "token_type": "bearer",
+#         "chef": {
+#             "id": str(chef["_id"]),
+#             "phone_number": chef["phone_number"]
+#         }
+#     }
+
 @router.post("/chef/login")
 async def login_chef(data: ChefLoginRequest):
     chef = await db["chef_user"].find_one({"phone_number": data.phone_number})
+    new_chef_flag = False
+    chef_name = None
+
     if not chef:
-        raise HTTPException(status_code=404, detail="Chef not found")
+        # Create a new chef
+        # Try to get name from user collection
+        user = await db["user"].find_one({"phone_number": data.phone_number})
+        chef_name = user.get("name") if user else data.name if hasattr(data, "name") else None
+
+        chef_data = {
+            "phone_number": data.phone_number,
+            "role": "chef",
+            "name": chef_name,
+        }
+        result = await db["chef_user"].insert_one(chef_data)
+        chef = await db["chef_user"].find_one({"_id": result.inserted_id})
+    else:
+        # If chef exists, get name from user if available
+        user = await db["user"].find_one({"phone_number": data.phone_number})
+        chef_name = user.get("name") if user else chef.get("name")
+
+    # new_chef_flag: True if chef has a name, False if not
+    new_chef_flag = False if chef_name else True
 
     token_data = {
         "sub": str(chef["_id"]),
@@ -52,12 +96,13 @@ async def login_chef(data: ChefLoginRequest):
         "message": "Login successful",
         "access_token": access_token,
         "token_type": "bearer",
+        "new": new_chef_flag,
         "chef": {
             "id": str(chef["_id"]),
-            "phone_number": chef["phone_number"]
+            "phone_number": chef["phone_number"],
+            "name": chef_name,
         }
     }
-
 
 
 
