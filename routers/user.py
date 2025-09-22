@@ -37,17 +37,27 @@ async def create_or_get_user(chef: userPhoneCreate):
 
 
 
-
 @router.post("/login")
-async def login_user(data: LoginRequest):
+async def login_or_create_user(data: LoginRequest):
+    # Try to find the user
     user = await db["app_user"].find_one({"phone_number": data.phone_number})
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
 
+    # If not found, create a new one
+    if not user:
+        new_user = {
+            "phone_number": data.phone_number,
+            "role": "user",   # default role
+            "created_at": datetime.utcnow(),
+        }
+        result = await db["app_user"].insert_one(new_user)
+        new_user["_id"] = result.inserted_id
+        user = new_user
+
+    # Prepare token payload
     token_data = {
         "sub": str(user["_id"]),
         "phone_number": user["phone_number"],
-        "role": "user"
+        "role": user.get("role", "user"),
     }
     access_token = create_access_token(data=token_data)
 
@@ -57,7 +67,8 @@ async def login_user(data: LoginRequest):
         "token_type": "bearer",
         "user": {
             "id": str(user["_id"]),
-            "phone_number": user["phone_number"]
+            "phone_number": user["phone_number"],
+            "role": user.get("role", "user"),
         }
     }
 
@@ -833,6 +844,47 @@ async def create_order(current_user: dict = Depends(get_current_user)):
         "order": order
     }
 
+
+@router.get("/orders/user")
+async def get_user_orders(current_user: dict = Depends(get_current_user)):
+    """Get all orders placed by the user."""
+    if current_user["role"] != "user":
+        raise HTTPException(status_code=403, detail="Only users can view their orders")
+
+    user_id = str(current_user["_id"])
+    orders_cursor = db["orders"].find({"user_id": user_id}).sort("created_at", -1)
+
+    orders = []
+    async for order in orders_cursor:
+        order["_id"] = str(order["_id"])
+        if "address" in order and "_id" in order["address"]:
+            order["address"]["_id"] = str(order["address"]["_id"])
+        orders.append(order)
+
+    return {"status": "success", "orders": orders}
+
+#-------------------------------get individual order--------------------------#
+
+@router.get("/orders/user/{order_id}")
+async def get_user_order(order_id: str, current_user: dict = Depends(get_current_user)):
+    """Get a specific order placed by the user."""
+    if current_user["role"] != "user":
+        raise HTTPException(status_code=403, detail="Only users can view this")
+
+    try:
+        oid = ObjectId(order_id)
+    except:
+        raise HTTPException(status_code=400, detail="Invalid order ID")
+
+    order = await db["orders"].find_one({"_id": oid, "user_id": str(current_user["_id"])})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    order["_id"] = str(order["_id"])
+    if "address" in order and "_id" in order["address"]:
+        order["address"]["_id"] = str(order["address"]["_id"])
+
+    return {"status": "success", "order": order}
 
 
 

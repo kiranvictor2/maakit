@@ -441,3 +441,25 @@ async def get_all_orders(current_user: dict = Depends(get_current_user)):
     chef_id = str(current_user["_id"])
     orders = await db["orders"].find({"chef_id": chef_id}).to_list(length=None)
     return {"status": "success", "orders": convert_object_ids(orders)}
+
+#--------------------individual order-------------------------#
+@router.get("/orders/chef/{order_id}")
+async def get_chef_order(order_id: str, current_user: dict = Depends(get_current_user)):
+    """Get a specific order received by the chef."""
+    if current_user["role"] != "chef":
+        raise HTTPException(status_code=403, detail="Only chefs can view this")
+
+    try:
+        oid = ObjectId(order_id)
+    except:
+        raise HTTPException(status_code=400, detail="Invalid order ID")
+
+    order = await db["orders"].find_one({"_id": oid, "chef_id": str(current_user["_id"])})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    order["_id"] = str(order["_id"])
+    if "address" in order and "_id" in order["address"]:
+        order["address"]["_id"] = str(order["address"]["_id"])
+
+    return {"status": "success", "order": order}
