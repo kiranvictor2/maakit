@@ -11,7 +11,7 @@ from mongoengine import connect
 app = FastAPI()
 # Mount "uploads" folder
 app.mount("/static", StaticFiles(directory="uploads"), name="static")
-connect(db="maakitchen", host="mongodb://localhost:27017")
+connect(db="maakitchen", host="mongodb://3.110.207.229:27017")
 # Allow CORS for frontend
 app.add_middleware(
     CORSMiddleware,

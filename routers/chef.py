@@ -1,7 +1,7 @@
 # routers/chef.py
 from fastapi import APIRouter, HTTPException,Depends
 from fastapi.responses import FileResponse
-
+from datetime import datetime
 from bson import ObjectId
 from typing import List, Optional
 from models.chef import ChefCreate
@@ -410,6 +410,7 @@ async def get_ongoing_orders(current_user: dict = Depends(get_current_user)):
     # Fetch user details for each order
     for order in orders:
         user_id = order.get("user_id")
+        delivery=order.get("delivery_boy_id")
         if user_id:
             user = await db["app_user"].find_one({"_id": ObjectId(user_id)})
             if user:
@@ -420,6 +421,13 @@ async def get_ongoing_orders(current_user: dict = Depends(get_current_user)):
                     "last_seen": user.get("last_seen"),
                     "created_at": user.get("created_at"),
                     "location": user.get("location")
+                }
+        if delivery:
+            delivery = await db["delivery_user"].find_one({"_id": ObjectId(delivery)})
+            if delivery:
+                order["delivery_user"] = {
+                    "phone_number": delivery.get("phone_number"),
+                
                 }
 
     return {"status": "success", "orders": convert_object_ids(orders)}
@@ -441,6 +449,117 @@ async def get_all_orders(current_user: dict = Depends(get_current_user)):
     chef_id = str(current_user["_id"])
     orders = await db["orders"].find({"chef_id": chef_id}).to_list(length=None)
     return {"status": "success", "orders": convert_object_ids(orders)}
+
+
+#update status-------------------------------#
+
+
+@router.put("/orders/{order_id}/status")
+async def update_order_status(
+    order_id: str,
+    status_data: dict,
+    current_user: dict = Depends(get_current_user)
+):
+    """Update order status - only chefs can update order status"""
+    if current_user["role"] != "chef":
+        raise HTTPException(status_code=403, detail="Only chefs can update order status")
+    
+    chef_id = str(current_user["_id"])
+    
+    # Validate the order exists and belongs to this chef
+    try:
+        order = await db["orders"].find_one({
+            "_id": ObjectId(order_id),
+            "chef_id": chef_id
+        })
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid order ID format")
+    
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found or access denied")
+    
+    # Extract status from request body
+    new_status = status_data.get("status")
+    if not new_status:
+        raise HTTPException(status_code=400, detail="Status is required")
+    
+    # Define valid status transitions
+    valid_statuses = ["chef_accepted", "preparing", "ready", "completed", "cancelled"]
+    if new_status not in valid_statuses:
+        raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {valid_statuses}")
+    
+    # Define status transition rules
+    current_status = order.get("status", "pending")
+    
+    # Status transition validation
+    valid_transitions = {
+        "pending": ["chef_accepted", "cancelled"],
+        "chef_accepted": ["preparing", "cancelled"],
+        "preparing": ["ready", "cancelled"],
+        "ready": ["completed", "cancelled"],
+        "completed": [],  # Final state
+        "cancelled": []   # Final state
+    }
+    
+    if new_status not in valid_transitions.get(current_status, []):
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Invalid status transition from '{current_status}' to '{new_status}'"
+        )
+    
+    # Prepare update data
+    update_data = {
+        "status": new_status,
+        "updated_at": datetime.utcnow()
+    }
+    
+    # Update chef_status based on the new status
+    if new_status == "chef_accepted":
+        update_data["chef_status"] = "accepted"
+    elif new_status in ["preparing", "ready"]:
+        update_data["chef_status"] = "accepted"
+    elif new_status == "cancelled":
+        update_data["chef_status"] = "cancelled"
+    elif new_status == "completed":
+        update_data["chef_status"] = "completed"
+    
+    # Auto-update delivery status for certain order statuses
+    if new_status == "ready":
+        # When order is ready, set delivery status to pending_assignment if not already assigned
+        if order.get("delivery_status") in ["pending", "pending_assignment", None]:
+            update_data["delivery_status"] = "pending_assignment"
+    
+    try:
+        # Update the order
+        result = await db["orders"].update_one(
+            {"_id": ObjectId(order_id)},
+            {"$set": update_data}
+        )
+        
+        if result.modified_count == 0:
+            raise HTTPException(status_code=400, detail="Failed to update order status")
+        
+        # Fetch updated order
+        updated_order = await db["orders"].find_one({"_id": ObjectId(order_id)})
+        updated_order["_id"] = str(updated_order["_id"])
+        
+        # Optional: Send notification to user (implement as needed)
+        # await notify_user_status_update(order["user_id"], order_id, new_status)
+        
+        return {
+            "status": "success",
+            "message": f"Order status updated to '{new_status}'",
+            "order": updated_order
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update order: {str(e)}")
+
+
+
+
+
+
 
 #--------------------individual order-------------------------#
 @router.get("/orders/chef/{order_id}")

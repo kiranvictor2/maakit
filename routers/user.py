@@ -311,6 +311,7 @@ async def get_nearby_chefs(
         "name": 1,
         "location": 1,
         "address": 1,
+        "photo_url":1,
     }
 
 
@@ -616,17 +617,17 @@ async def add_to_cart(item: CartItemRequest, current_user: dict = Depends(get_cu
             "last_update": datetime.utcnow()
         }
 
-    # Update or insert item
+    # ✅ Always increase quantity by 1
     for cart_item in cart["items"]:
         if cart_item["food_id"] == str(food_item["_id"]):
-            cart_item["quantity"] = item.quantity
+            cart_item["quantity"] += 1
             break
     else:
         cart["items"].append({
             "food_id": str(food_item["_id"]),
             "chef_id": str(food_item["chef_id"]),
             "food_name": food_item["food_name"],
-            "quantity": item.quantity,
+            "quantity": 1,  # start at 1
             "price": food_item["price"],
         })
 
@@ -639,37 +640,31 @@ async def add_to_cart(item: CartItemRequest, current_user: dict = Depends(get_cu
         upsert=True
     )
 
-    # ⚡ Refetch the saved cart to include _id field
     saved_cart = await db["carts"].find_one({"user_id": user_id})
-
     return {"status": "success", "cart": convert_mongo_document(saved_cart)}
 
 
 #-------------------------------remove cart----------------------#
 @router.post("/cart/remove")
 async def remove_from_cart(item: CartItemRequest, current_user: dict = Depends(get_current_user)):
-    # ✅ Only app users can remove from cart
     if current_user["role"] != "user":
         raise HTTPException(status_code=403, detail="Only app users can remove from cart")
     
     user_id = str(current_user["_id"])
 
-    # 1️⃣ Fetch user cart
     cart = await db["carts"].find_one({"user_id": user_id})
     if not cart or not cart.get("items"):
         raise HTTPException(status_code=404, detail="Cart is empty")
 
-    # 2️⃣ Find item in cart
     updated_items = []
     item_removed = False
 
     for cart_item in cart["items"]:
         if cart_item["food_id"] == item.food_id:
-            # If quantity > 1, decrease
-            if cart_item["quantity"] > item.quantity:
-                cart_item["quantity"] -= item.quantity
+            # ✅ Always decrease by 1
+            if cart_item["quantity"] > 1:
+                cart_item["quantity"] -= 1
                 updated_items.append(cart_item)
-            # If equal or less, remove item completely
             else:
                 item_removed = True
                 continue
@@ -679,12 +674,10 @@ async def remove_from_cart(item: CartItemRequest, current_user: dict = Depends(g
     if not updated_items and not item_removed:
         raise HTTPException(status_code=404, detail="Item not found in cart")
 
-    # 3️⃣ Update cart
     cart["items"] = updated_items
     cart["total_price"] = sum(i["price"] * i["quantity"] for i in cart["items"])
     cart["last_update"] = datetime.utcnow()
 
-    # If cart is empty → remove cart completely
     if not cart["items"]:
         await db["carts"].delete_one({"user_id": user_id})
         return {"status": "success", "message": "Cart is now empty"}
@@ -696,7 +689,6 @@ async def remove_from_cart(item: CartItemRequest, current_user: dict = Depends(g
     )
 
     saved_cart = await db["carts"].find_one({"user_id": user_id})
-
     return {"status": "success", "cart": convert_mongo_document(saved_cart)}
 
 
