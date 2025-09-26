@@ -36,7 +36,7 @@ class LoginRequest(BaseModel):
 
 class userPhoneCreate(BaseModel):
     phone_number: str
-    role: str = "chef"
+    role: str = "user"
 
 from typing import List, Optional
 from pydantic import BaseModel
