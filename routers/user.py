@@ -629,6 +629,7 @@ async def add_to_cart(item: CartItemRequest, current_user: dict = Depends(get_cu
             "food_name": food_item["food_name"],
             "quantity": 1,  # start at 1
             "price": food_item["price"],
+            "photo_url":food_item["photo_url"]
         })
 
     cart["total_price"] = sum(i["price"] * i["quantity"] for i in cart["items"])
