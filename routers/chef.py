@@ -13,6 +13,13 @@ from enum import Enum
 
 router = APIRouter()
 
+@router.get("/chefme")
+async def get_my_profile(current_user: dict = Depends(get_current_user)):
+    # Convert ObjectId to string for JSON serialization
+    current_user["_id"] = str(current_user["_id"])
+    
+    return current_user
+
 @router.post("/chefs")
 async def create_or_get_chef(chef: ChefPhoneCreate):
     existing = await db["chef_user"].find_one({"phone_number": chef.phone_number})
