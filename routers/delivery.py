@@ -107,20 +107,15 @@ async def update_delivery_profile(
 
 # ------------------- Delivery Profile Update -------------------
 def save_image_and_get_url(contents: bytes, filename: str = None) -> str:
-    # Make sure folder exists
-    os.makedirs(UPLOAD_DIR_PROFILE, exist_ok=True)
-
-    # Create unique filename
     ext = filename.split(".")[-1] if filename else "jpg"
     unique_name = f"{uuid.uuid4().hex}.{ext}"
     filepath = os.path.join(UPLOAD_DIR_PROFILE, unique_name)
 
-    # Save file
     with open(filepath, "wb") as f:
         f.write(contents)
 
-    # Return URL relative to static mount
-    return f"/static/chefprofile/{unique_name}"
+    return f"/static/profile/{unique_name}"  # 🔹 matches uploads/profile
+
 
 
 
