@@ -51,13 +51,8 @@ async def create_or_get_user(delivery: deliveryPhoneCreate):
         "new": True  # new user created
     }
 
-from fastapi.responses import JSONResponse
-import traceback
-@router.post("/delivery/profile/test")
-async def test_delivery_profile():
-    return {"message": "Hello! Endpoint is working."}
 
-@router.post("/deliveryboy/update")
+@router.post("/deliveryupdate")
 async def update_delivery_profile(
     name: Optional[str] = Form(None),
     email: Optional[str] = Form(None),
@@ -67,51 +62,47 @@ async def update_delivery_profile(
     driving_license_back: Optional[UploadFile] = File(None),
     current_user: dict = Depends(get_current_user)
 ):
-    try:
-        print("DEBUG: Current user:", current_user)
-        user_id = current_user["_id"]
+    print("Current user:", current_user)
+    user_id = current_user["_id"]
 
-        update_data = {}
+    update_data = {}
 
-        if name:
-            update_data["name"] = name
-        if email:
-            update_data["email"] = email
-        if vehicle:
-            update_data["vehicle"] = vehicle
+    if name:
+        update_data["name"] = name
+    if email:
+        update_data["email"] = email
+    if vehicle:
+        update_data["vehicle"] = vehicle
 
-        if file is not None:
-            contents = await file.read()
-            photo_url = save_image_and_get_url(contents, file.filename)
-            update_data["photo_url"] = photo_url
+    # Profile photo
+    if file is not None:
+        contents = await file.read()
+        photo_url = save_image_and_get_url(contents, file.filename)
+        update_data["photo_url"] = photo_url
 
-        if driving_license_front is not None:
-            contents = await driving_license_front.read()
-            front_url = save_image_and_get_url(contents, driving_license_front.filename)
-            update_data["driving_license_front"] = front_url
+    # Driving license front
+    if driving_license_front is not None:
+        contents = await driving_license_front.read()
+        front_url = save_image_and_get_url(contents, driving_license_front.filename)
+        update_data["driving_license_front"] = front_url
 
-        if driving_license_back is not None:
-            contents = await driving_license_back.read()
-            back_url = save_image_and_get_url(contents, driving_license_back.filename)
-            update_data["driving_license_back"] = back_url
+    # Driving license back
+    if driving_license_back is not None:
+        contents = await driving_license_back.read()
+        back_url = save_image_and_get_url(contents, driving_license_back.filename)
+        update_data["driving_license_back"] = back_url
 
-        if update_data:
-            await db["delivery_user"].update_one(
-                {"_id": ObjectId(user_id)},
-                {"$set": update_data}
-            )
-
-        return {"message": "Profile updated successfully", "updated": update_data}
-
-    except Exception as e:
-        error_trace = traceback.format_exc()
-        return JSONResponse(
-            status_code=500,
-            content={
-                "error": str(e),
-                "traceback": error_trace
-            }
+    # Save updates if any
+    if update_data:
+        await db["delivery_user"].update_one(
+            {"_id": ObjectId(user_id)},
+            {"$set": update_data}
         )
+
+    return {
+        "message": "Profile updated successfully",
+        "updated": update_data
+    }
 
 
 # ------------------- Delivery Profile Update -------------------
