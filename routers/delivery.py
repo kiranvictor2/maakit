@@ -57,7 +57,7 @@ import traceback
 async def test_delivery_profile():
     return {"message": "Hello! Endpoint is working."}
 
-@router.post("/delivery/profile")
+@router.post("/deliveryboy/update")
 async def update_delivery_profile(
     name: Optional[str] = Form(None),
     email: Optional[str] = Form(None),
