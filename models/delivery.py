@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, EmailStr
 from typing import Optional
 
 class deliveryPhoneCreate(BaseModel):
@@ -8,3 +8,11 @@ class deliveryPhoneCreate(BaseModel):
 class LocationUpdate(BaseModel):
     latitude: float
     longitude: float
+
+class DeliveryProfileCreate(BaseModel):
+    name: str
+    email: EmailStr
+    vehicle: str
+    photo_url: str | None = None
+    driving_license_front: str | None = None
+    driving_license_back: str | None = None
