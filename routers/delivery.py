@@ -53,6 +53,9 @@ async def create_or_get_user(delivery: deliveryPhoneCreate):
 
 from fastapi.responses import JSONResponse
 import traceback
+@router.post("/delivery/profile/test")
+async def test_delivery_profile():
+    return {"message": "Hello! Endpoint is working."}
 
 @router.post("/delivery/profile")
 async def update_delivery_profile(
