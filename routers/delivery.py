@@ -67,9 +67,8 @@ def save_image_and_get_url(contents: bytes, filename: str = None) -> str:
 
     # Return URL relative to static mount
     return f"/static/chefprofile/{unique_name}"
-
 @router.post("/delivery/profile")
-async def update_chef_profile(
+async def update_delivery_profile(
     name: Optional[str] = Form(None),
     email: Optional[str] = Form(None),
     vehicle: Optional[str] = Form(None),
@@ -90,31 +89,36 @@ async def update_chef_profile(
     if vehicle:
         update_data["vehicle"] = vehicle
 
-    if file is not None:  # only if file uploaded
+    # Profile photo
+    if file is not None:
         contents = await file.read()
         photo_url = save_image_and_get_url(contents, file.filename)
         update_data["photo_url"] = photo_url
-    
-    if driving_license_front is not None:  # only if file uploaded
+
+    # Driving license front
+    if driving_license_front is not None:
         contents = await driving_license_front.read()
-        driving_license_front = save_image_and_get_url(contents, file.filename)
+        front_url = save_image_and_get_url(contents, driving_license_front.filename)
+        update_data["driving_license_front"] = front_url
 
-        update_data["driving_license_front"] = driving_license_front
-
-    if driving_license_back is not None:  # only if file uploaded
+    # Driving license back
+    if driving_license_back is not None:
         contents = await driving_license_back.read()
-        driving_license_back = save_image_and_get_url(contents, file.filename)
-        update_data["driving_license_back"] = driving_license_back
+        back_url = save_image_and_get_url(contents, driving_license_back.filename)
+        update_data["driving_license_back"] = back_url
 
-
-
+    # Save updates if any
     if update_data:
         await db["delivery_user"].update_one(
             {"_id": ObjectId(user_id)},
             {"$set": update_data}
         )
 
-    return {"message": "Profile updated successfully", "updated": update_data}
+    return {
+        "message": "Profile updated successfully",
+        "updated": update_data
+    }
+
 
 
 @router.get("/orders/delivery/me")
