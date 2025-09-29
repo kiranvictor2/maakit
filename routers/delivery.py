@@ -51,6 +51,36 @@ async def create_or_get_user(delivery: deliveryPhoneCreate):
         "new": True  # new user created
     }
 
+@router.post("/delivery/update-location")
+async def update_location(
+    location: LocationUpdate,
+    current_user: dict = Depends(get_current_user)
+):
+    if current_user["role"] != "delivery":
+        raise HTTPException(status_code=403, detail="Only delivery users can update location")
+
+    delivery_id = ObjectId(current_user["_id"])
+
+    # Update location directly in delivery_user
+    update_data = {
+        "location": {
+            "type": "Point",
+            "coordinates": [location.longitude, location.latitude]
+        },
+        "last_update": datetime.utcnow(),
+        "status": False
+    }
+
+    result = await db["delivery_user"].update_one(
+        {"_id": delivery_id},
+        {"$set": update_data}
+    )
+
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Delivery user not found")
+
+    return {"status": "success", "message": "Location updated"}
+
 
 @router.post("/deliveryupdate")
 async def update_delivery_profile(
