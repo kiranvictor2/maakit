@@ -135,6 +135,35 @@ async def update_delivery_profile(
     }
 
 
+#---------------------delivery ongoing ordeers------------#
+@router.get("/ongoing/delivery/me")
+async def get_my_orders(current_user: dict = Depends(get_current_user)):
+    # Only delivery users can access
+    if current_user.get("role") != "delivery":
+        raise HTTPException(status_code=403, detail="Only delivery users can access")
+
+    delivery_id = str(current_user["_id"])
+
+    # Fetch orders assigned to this delivery boy with pending or picked status
+    orders_cursor = db["orders"].find({
+        "delivery_boy_id": delivery_id,
+        "delivery_status": {"$in": ["assigned","picked"]}
+    })
+
+    orders = await orders_cursor.to_list(length=None)
+
+    # Convert ObjectIds to strings for frontend
+    for order in orders:
+        order["_id"] = str(order["_id"])
+        order["chef_id"] = str(order.get("chef_id", ""))
+        order["delivery_boy_id"] = str(order.get("delivery_boy_id", ""))
+        for item in order.get("items", []):
+            item["food_id"] = str(item.get("food_id", ""))
+            item["chef_id"] = str(item.get("chef_id", ""))
+
+    return {"status": "success", "orders": orders}
+
+
 # ------------------- Delivery Profile Update -------------------
 def save_image_and_get_url(contents: bytes, filename: str = None) -> str:
     # Make sure folder exists
