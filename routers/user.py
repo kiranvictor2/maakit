@@ -15,6 +15,14 @@ from typing import List, Optional
 
 router = APIRouter()
 
+
+@router.get("/userme")
+async def get_my_profile(current_user: dict = Depends(get_current_user)):
+    # Convert ObjectId to string for JSON serialization
+    current_user["_id"] = str(current_user["_id"])
+    
+    return current_user
+
 @router.post("/users")
 async def create_or_get_user(chef: userPhoneCreate):
     existing = await db["app_user"].find_one({"phone_number": chef.phone_number})

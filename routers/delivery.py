@@ -21,6 +21,12 @@ UPLOAD_DIR_LICENSE = "uploads/licenses"
 os.makedirs(UPLOAD_DIR_PROFILE, exist_ok=True)
 os.makedirs(UPLOAD_DIR_LICENSE, exist_ok=True)
 
+@router.get("/deliveryme")
+async def get_my_profile(current_user: dict = Depends(get_current_user)):
+    # Convert ObjectId to string for JSON serialization
+    current_user["_id"] = str(current_user["_id"])
+    
+    return current_user
 
 ## ------------------- Create or Get Delivery User -------------------
 @router.post("/delivery/users")
