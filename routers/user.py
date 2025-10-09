@@ -1205,3 +1205,86 @@ from typing import List
 @router.get("/food-styles", response_model=List[str])
 def get_food_styles():
     return food_styles
+
+
+#user order track----------#
+@router.get("/orders/me")  # <-- decorator goes here
+async def get_user_orders(current_user: dict = Depends(get_current_user)):
+    if current_user["role"] != "user":
+        raise HTTPException(status_code=403, detail="Only users can access this endpoint")
+
+    user_id = str(current_user["_id"])
+
+    # Fetch orders for this user
+    orders = await db["orders"].find({"user_id": user_id}).to_list(length=None)
+
+    for order in orders:
+        order["_id"] = str(order["_id"])
+        order["user_id"] = str(order["user_id"])
+        order["delivery_boy_id"] = str(order.get("delivery_boy_id", ""))
+
+        # Fetch chef info
+        chef = await db["chef_user"].find_one({"_id": ObjectId(order["chef_id"])})
+        order["chef"] = {
+            "name": chef.get("name") if chef else "Unknown",
+            "profile_pic": chef.get("photo_url") if chef else None,
+            "location": chef.get("location") if chef else None
+        }
+
+        # Fetch delivery boy info (if assigned)
+        delivery_boy = None
+        if order.get("delivery_boy_id"):
+            delivery_boy = await db["app_user"].find_one({"_id": ObjectId(order["delivery_boy_id"])})
+        order["delivery_boy_name"] = delivery_boy.get("name") if delivery_boy else "Not assigned"
+        order["delivery_boy_location"] = delivery_boy.get("location") if delivery_boy else None
+
+        # Convert item IDs
+        for item in order.get("items", []):
+            item["food_id"] = str(item["food_id"])
+            item["chef_id"] = str(item["chef_id"])
+
+    return {"status": "success", "orders": orders}
+
+
+# Track individual order by order ID
+@router.get("/orders/me/{order_id}")
+async def track_order(order_id: str, current_user: dict = Depends(get_current_user)):
+    if current_user["role"] != "user":
+        raise HTTPException(status_code=403, detail="Only users can access this endpoint")
+
+    user_id = str(current_user["_id"])
+
+    # Fetch the order for this user by order_id
+    order = await db["orders"].find_one({
+        "_id": ObjectId(order_id),
+        "user_id": user_id
+    })
+
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    order["_id"] = str(order["_id"])
+    order["user_id"] = str(order["user_id"])
+    order["delivery_boy_id"] = str(order.get("delivery_boy_id", ""))
+
+    # Fetch chef info
+    chef = await db["chef_user"].find_one({"_id": ObjectId(order["chef_id"])})
+    order["chef"] = {
+        "name": chef.get("name") if chef else "Unknown",
+        "profile_pic": chef.get("photo_url") if chef else None,
+        "location": chef.get("location") if chef else None
+    }
+
+    # Fetch delivery boy info (if assigned)
+    delivery_boy = None
+    if order.get("delivery_boy_id"):
+        delivery_boy = await db["delivery_user"].find_one({"_id": ObjectId(order["delivery_boy_id"])})
+    order["delivery_boy_name"] = delivery_boy.get("name") if delivery_boy else "Not assigned"
+    order["delivery_boy_location"] = delivery_boy.get("location") if delivery_boy else None
+
+    # Convert item IDs
+    for item in order.get("items", []):
+        item["food_id"] = str(item["food_id"])
+        item["chef_id"] = str(item["chef_id"])
+
+    return {"status": "success", "order": order}

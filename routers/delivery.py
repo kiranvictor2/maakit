@@ -199,7 +199,7 @@ async def get_my_orders(current_user: dict = Depends(get_current_user)):
     # Fetch orders assigned to this delivery boy with pending or picked status
     orders = await db["orders"].find({
         "delivery_boy_id": delivery_id,
-        "delivery_status": {"$in": ["pending", "picked"]}
+        "delivery_status": {"$in": ["pending", "picked","assigned"]}
     }).to_list(length=None)
 
     # Convert ObjectIds to strings for frontend
