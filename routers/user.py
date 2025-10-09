@@ -1,5 +1,5 @@
 # routers/user.py
-from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect,Form,File,UploadFile
 from bson import ObjectId
 from auth.jwt_handler import get_current_user
 from models.user import FoodFilter   # adjust path to your actual file
@@ -11,6 +11,7 @@ from auth.utils import create_access_token  # ✅ Import token creator
 from datetime import datetime
 import asyncio
 import uuid
+from typing import List, Optional
 
 router = APIRouter()
 
@@ -73,7 +74,56 @@ async def login_or_create_user(data: LoginRequest):
     }
 
 
+@router.post("/user/profile/update")
+async def update_user_profile(
+    name: Optional[str] = Form(None),
+    email: Optional[str] = Form(None),
+    file: Optional[UploadFile] = File(None),
+    current_user: dict = Depends(get_current_user)
+):
+    user_id = current_user["_id"]
 
+    update_data = {}
+
+    if name:
+        update_data["name"] = name
+    if email:
+        update_data["email"] = email
+    if file:
+        contents = await file.read()
+        photo_url = save_image_and_get_url(contents, file.filename)
+        update_data["photo_url"] = photo_url
+
+    if update_data:
+        await db["app_user"].update_one(
+            {"_id": ObjectId(user_id)},
+            {"$set": update_data}
+        )
+
+    return {"message": "Profile updated successfully", "updated": update_data}
+
+
+from fastapi import APIRouter, UploadFile, File, Form, Depends
+import os
+import uuid
+
+UPLOAD_FOLDER = "uploads/userprofile"  # folder for chef profile images
+
+def save_image_and_get_url(contents: bytes, filename: str = None) -> str:
+    # Make sure folder exists
+    os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+    # Create unique filename
+    ext = filename.split(".")[-1] if filename else "jpg"
+    unique_name = f"{uuid.uuid4().hex}.{ext}"
+    filepath = os.path.join(UPLOAD_FOLDER, unique_name)
+
+    # Save file
+    with open(filepath, "wb") as f:
+        f.write(contents)
+
+    # Return URL relative to static mount
+    return f"/static/userprofile/{unique_name}"
 
 @router.post("/userlocation/update")
 async def update_location(
