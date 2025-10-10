@@ -1277,7 +1277,7 @@ async def track_order(order_id: str, current_user: dict = Depends(get_current_us
     # Fetch delivery boy info (if assigned)
     delivery_boy = None
     if order.get("delivery_boy_id"):
-        delivery_boy = await db["app_user"].find_one({"_id": ObjectId(order["delivery_boy_id"])})
+        delivery_boy = await db["delivery_user"].find_one({"_id": ObjectId(order["delivery_boy_id"])})
 
     order["delivery_boy_name"] = delivery_boy.get("name") if delivery_boy else "Not assigned"
     order["delivery_boy_location"] = delivery_boy.get("location") if delivery_boy else None
