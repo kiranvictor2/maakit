@@ -1208,15 +1208,18 @@ def get_food_styles():
 
 
 #user order track----------#
-@router.get("/orders/me")  # <-- decorator goes here
+@router.get("/orders/me")
 async def get_user_orders(current_user: dict = Depends(get_current_user)):
     if current_user["role"] != "user":
         raise HTTPException(status_code=403, detail="Only users can access this endpoint")
 
     user_id = str(current_user["_id"])
 
-    # Fetch orders for this user
-    orders = await db["orders"].find({"user_id": user_id}).to_list(length=None)
+    # Fetch all orders for the user
+    orders = await db["orders"].find({"user_id": user_id}).sort("created_at", -1).to_list(length=None)
+
+    current_orders = []
+    past_orders = []
 
     for order in orders:
         order["_id"] = str(order["_id"])
@@ -1231,19 +1234,19 @@ async def get_user_orders(current_user: dict = Depends(get_current_user)):
             "location": chef.get("location") if chef else None
         }
 
-        # Fetch delivery boy info (if assigned)
-        delivery_boy = None
-        if order.get("delivery_boy_id"):
-            delivery_boy = await db["app_user"].find_one({"_id": ObjectId(order["delivery_boy_id"])})
-        order["delivery_boy_name"] = delivery_boy.get("name") if delivery_boy else "Not assigned"
-        order["delivery_boy_location"] = delivery_boy.get("location") if delivery_boy else None
+        # Categorize based on order_status
+        status = order.get("order_status", "pending")
+        if status in ["pending", "preparing", "out_for_delivery"]:
+            current_orders.append(order)
+        elif status in ["delivered", "cancelled"]:
+            past_orders.append(order)
 
-        # Convert item IDs
-        for item in order.get("items", []):
-            item["food_id"] = str(item["food_id"])
-            item["chef_id"] = str(item["chef_id"])
+    return {
+        "status": "success",
+        "current_orders": current_orders,
+        "past_orders": past_orders
+    }
 
-    return {"status": "success", "orders": orders}
 
 
 # Track individual order by order ID
@@ -1254,12 +1257,8 @@ async def track_order(order_id: str, current_user: dict = Depends(get_current_us
 
     user_id = str(current_user["_id"])
 
-    # Fetch the order for this user by order_id
-    order = await db["orders"].find_one({
-        "_id": ObjectId(order_id),
-        "user_id": user_id
-    })
-
+    # Fetch the specific order for this user
+    order = await db["orders"].find_one({"_id": ObjectId(order_id), "user_id": user_id})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
 
@@ -1278,7 +1277,8 @@ async def track_order(order_id: str, current_user: dict = Depends(get_current_us
     # Fetch delivery boy info (if assigned)
     delivery_boy = None
     if order.get("delivery_boy_id"):
-        delivery_boy = await db["delivery_user"].find_one({"_id": ObjectId(order["delivery_boy_id"])})
+        delivery_boy = await db["app_user"].find_one({"_id": ObjectId(order["delivery_boy_id"])})
+
     order["delivery_boy_name"] = delivery_boy.get("name") if delivery_boy else "Not assigned"
     order["delivery_boy_location"] = delivery_boy.get("location") if delivery_boy else None
 
