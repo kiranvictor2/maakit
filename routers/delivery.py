@@ -153,21 +153,47 @@ async def get_my_orders(current_user: dict = Depends(get_current_user)):
     # Fetch orders assigned to this delivery boy with pending or picked status
     orders_cursor = db["orders"].find({
         "delivery_boy_id": delivery_id,
-        "delivery_status": {"$in": ["assigned","picked"]}
+        "delivery_status": {"$in": ["assigned", "picked"]}
     })
 
     orders = await orders_cursor.to_list(length=None)
 
-    # Convert ObjectIds to strings for frontend
+    # Prepare result list
+    enriched_orders = []
+
     for order in orders:
         order["_id"] = str(order["_id"])
         order["chef_id"] = str(order.get("chef_id", ""))
         order["delivery_boy_id"] = str(order.get("delivery_boy_id", ""))
+
+        # Convert item IDs
         for item in order.get("items", []):
             item["food_id"] = str(item.get("food_id", ""))
             item["chef_id"] = str(item.get("chef_id", ""))
 
-    return {"status": "success", "orders": orders}
+        # Fetch chef info
+        chef = await db["chef_user"].find_one({"_id": ObjectId(order["chef_id"])})
+        if chef:
+            order["chef"] = {
+                "name": chef.get("name"),
+                "phone": chef.get("phone_number"),
+                "location": chef.get("location"),
+                "profile_pic": chef.get("photo_url"),
+
+            }
+        else:
+            order["chef"] = {
+                "name": "Unknown",
+                "phone": None,
+                "location": None,
+                "profile_pic": None,
+
+            }
+
+        enriched_orders.append(order)
+
+    return {"status": "success", "orders": enriched_orders}
+
 
 
 # ------------------- Delivery Profile Update -------------------
