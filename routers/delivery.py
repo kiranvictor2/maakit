@@ -158,13 +158,13 @@ async def get_my_orders(current_user: dict = Depends(get_current_user)):
 
     orders = await orders_cursor.to_list(length=None)
 
-    # Prepare result list
     enriched_orders = []
 
     for order in orders:
         order["_id"] = str(order["_id"])
         order["chef_id"] = str(order.get("chef_id", ""))
         order["delivery_boy_id"] = str(order.get("delivery_boy_id", ""))
+        order["user_id"] = str(order.get("user_id", ""))  # Ensure user_id is string
 
         # Convert item IDs
         for item in order.get("items", []):
@@ -179,7 +179,6 @@ async def get_my_orders(current_user: dict = Depends(get_current_user)):
                 "phone": chef.get("phone_number"),
                 "location": chef.get("location"),
                 "profile_pic": chef.get("photo_url"),
-
             }
         else:
             order["chef"] = {
@@ -187,14 +186,28 @@ async def get_my_orders(current_user: dict = Depends(get_current_user)):
                 "phone": None,
                 "location": None,
                 "profile_pic": None,
+            }
 
+        # Fetch customer info
+        customer = await db["app_user"].find_one({"_id": ObjectId(order["user_id"])})
+        if customer:
+            order["customer"] = {
+                "name": customer.get("name"),
+                "phone": customer.get("phone_number"),
+                "email": customer.get("email"),
+                "location": customer.get("location"),
+            }
+        else:
+            order["customer"] = {
+                "name": "Unknown",
+                "phone": None,
+                "email": None,
+                "location": None,
             }
 
         enriched_orders.append(order)
 
     return {"status": "success", "orders": enriched_orders}
-
-
 
 # ------------------- Delivery Profile Update -------------------
 def save_image_and_get_url(contents: bytes, filename: str = None) -> str:
