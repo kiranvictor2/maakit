@@ -276,12 +276,11 @@ async def get_order(order_id: str, current_user: dict = Depends(get_current_user
     return {"status": "success", "order": order}
 
 
-
 # status update delivery boy
 @router.put("/orderdeliveryupdate/{order_id}/status")
 async def update_order_status(
     order_id: str,
-    status: str = Body(..., embed=True),  # Status comes in JSON body {"status": "picked"}
+    status: str = Body(..., embed=True),  # JSON body: {"status": "picked"}
     current_user: dict = Depends(get_current_user)
 ):
     # Only delivery boys can access
@@ -308,14 +307,75 @@ async def update_order_status(
     if status not in allowed_statuses:
         raise HTTPException(status_code=400, detail=f"Status must be one of {allowed_statuses}")
 
-    # Update status
-    await db["orders"].update_one({"_id": oid}, {"$set": {"delivery_status": status}})
+    update_data = {"delivery_status": status}
+
+    # If delivery completed, mark the overall order as completed
+    if status == "delivered":
+        update_data["status"] = "completed"
+
+    # Update order document
+    await db["orders"].update_one(
+        {"_id": oid},
+        {"$set": update_data}
+    )
 
     return {
         "status": "success",
         "order_id": str(order["_id"]),
-        "new_delivery_status": status
+        "new_delivery_status": status,
+        "new_order_status": update_data.get("status", order.get("status"))
     }
+
+#---------------------DELIVEERY BOY ORDER HISTORY-----------------#
+# delivery boy order tracking
+@router.get("/deliveryboy/orders")
+async def get_deliveryboy_orders(current_user: dict = Depends(get_current_user)):
+    if current_user["role"] != "delivery":
+        raise HTTPException(status_code=403, detail="Only delivery boys can access this endpoint")
+
+    delivery_boy_id = str(current_user["_id"])
+
+    # Fetch all orders assigned to this delivery boy
+    orders = await db["orders"].find({"delivery_boy_id": delivery_boy_id}).sort("created_at", -1).to_list(length=None)
+
+    ongoing_orders = []
+    past_orders = []
+
+    for order in orders:
+        order["_id"] = str(order["_id"])
+        order["user_id"] = str(order["user_id"])
+        order["chef_id"] = str(order["chef_id"])
+        order["delivery_boy_id"] = str(order["delivery_boy_id"])
+
+        # Fetch customer details
+        user = await db["users"].find_one({"_id": ObjectId(order["user_id"])})
+        order["customer"] = {
+            "name": user.get("name") if user else "Unknown",
+            "phone": user.get("phone") if user else None
+        }
+
+        # Fetch chef details
+        chef = await db["chef_user"].find_one({"_id": ObjectId(order["chef_id"])})
+        order["chef"] = {
+            "name": chef.get("name") if chef else "Unknown",
+            "profile_pic": chef.get("photo_url") if chef else None,
+            "location": chef.get("location") if chef else None
+        }
+
+        # Categorize based on delivery status
+        delivery_status = order.get("delivery_status", "pending")
+
+        if delivery_status in ["assigned", "picked_up", "out_for_delivery"]:
+            ongoing_orders.append(order)
+        elif delivery_status in ["delivered", "cancelled"]:
+            past_orders.append(order)
+
+    return {
+        "status": "success",
+        "ongoing_orders": ongoing_orders,
+        "past_orders": past_orders
+    }
+
 # ------------------- Delivery Profile Update -------------------
 def save_image_and_get_url(contents: bytes, filename: str = None) -> str:
     # Make sure folder exists
