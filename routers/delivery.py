@@ -1,5 +1,5 @@
 # routers/user.py
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile,Form, File
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile,Form, File, Body
 from bson import ObjectId
 from auth.jwt_handler import get_current_user
 from models.user import FoodFilter   # adjust path to your actual file
@@ -275,6 +275,47 @@ async def get_order(order_id: str, current_user: dict = Depends(get_current_user
 
     return {"status": "success", "order": order}
 
+
+
+# status update delivery boy
+@router.put("/orderdeliveryupdate/{order_id}/status")
+async def update_order_status(
+    order_id: str,
+    status: str = Body(..., embed=True),  # Status comes in JSON body {"status": "picked"}
+    current_user: dict = Depends(get_current_user)
+):
+    # Only delivery boys can access
+    if current_user.get("role") != "delivery":
+        raise HTTPException(status_code=403, detail="Only delivery users can update status")
+
+    # Validate ObjectId
+    try:
+        oid = ObjectId(order_id)
+    except errors.InvalidId:
+        raise HTTPException(status_code=400, detail="Invalid order ID")
+
+    # Fetch the order
+    order = await db["orders"].find_one({"_id": oid})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    # Ensure order is assigned to this delivery boy
+    if str(order.get("delivery_boy_id")) != str(current_user["_id"]):
+        raise HTTPException(status_code=403, detail="You cannot update this order")
+
+    # Allowed status updates
+    allowed_statuses = ["assigned", "picked", "delivered"]
+    if status not in allowed_statuses:
+        raise HTTPException(status_code=400, detail=f"Status must be one of {allowed_statuses}")
+
+    # Update status
+    await db["orders"].update_one({"_id": oid}, {"$set": {"delivery_status": status}})
+
+    return {
+        "status": "success",
+        "order_id": str(order["_id"]),
+        "new_delivery_status": status
+    }
 # ------------------- Delivery Profile Update -------------------
 def save_image_and_get_url(contents: bytes, filename: str = None) -> str:
     # Make sure folder exists
