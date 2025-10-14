@@ -209,6 +209,72 @@ async def get_my_orders(current_user: dict = Depends(get_current_user)):
 
     return {"status": "success", "orders": enriched_orders}
 
+
+
+
+
+# order status
+from bson import ObjectId, errors
+@router.get("/orderstatus/{order_id}")
+async def get_order(order_id: str, current_user: dict = Depends(get_current_user)):
+
+    # Only allow ObjectId if it's valid
+    try:
+        oid = ObjectId(order_id) if len(order_id) == 24 else None
+    except errors.InvalidId:
+        oid = None
+
+    query = {"_id": oid} if oid else {"_id": order_id}  # fallback to string ID if not ObjectId
+
+    # Fetch the order
+    order = await db["orders"].find_one(query)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    # Delivery boy check
+    if current_user.get("role") == "delivery" and str(order.get("delivery_boy_id")) != str(current_user["_id"]):
+        raise HTTPException(status_code=403, detail="You cannot access this order")
+
+    # Convert IDs to strings for JSON
+    for key in ["_id", "chef_id", "delivery_boy_id", "user_id"]:
+        if key in order:
+            order[key] = str(order[key])
+
+    # Items conversion
+    for item in order.get("items", []):
+        item["food_id"] = str(item.get("food_id", ""))
+        item["chef_id"] = str(item.get("chef_id", ""))
+
+    # Chef info
+    chef = None
+    if order.get("chef_id"):
+        try:
+            chef = await db["chef_user"].find_one({"_id": ObjectId(order["chef_id"])})
+        except errors.InvalidId:
+            chef = None
+    order["chef"] = {
+        "name": chef.get("name") if chef else "Unknown",
+        "phone": chef.get("phone_number") if chef else None,
+        "location": chef.get("location") if chef else None,
+        "profile_pic": chef.get("photo_url") if chef else None,
+    }
+
+    # Customer info
+    customer = None
+    if order.get("user_id"):
+        try:
+            customer = await db["app_user"].find_one({"_id": ObjectId(order["user_id"])})
+        except errors.InvalidId:
+            customer = None
+    order["customer"] = {
+        "name": customer.get("name") if customer else "Unknown",
+        "phone": customer.get("phone_number") if customer else None,
+        "email": customer.get("email") if customer else None,
+        "location": customer.get("location") if customer else None,
+    }
+
+    return {"status": "success", "order": order}
+
 # ------------------- Delivery Profile Update -------------------
 def save_image_and_get_url(contents: bytes, filename: str = None) -> str:
     # Make sure folder exists
