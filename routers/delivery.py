@@ -420,17 +420,10 @@ async def get_my_orders(current_user: dict = Depends(get_current_user)):
     return {"status": "success", "orders": orders}
 
 
-
-
 # Track individual order by order ID
 @router.get("/deliveryordertrack/{order_id}")
 async def track_order(order_id: str):
-    # if current_user["role"] != "user":
-    #     raise HTTPException(status_code=403, detail="Only users can access this endpoint")
-
-    # user_id = str(current_user["_id"])
-
-    # Fetch the specific order for this user
+    # Fetch the specific order
     order = await db["orders"].find_one({"_id": ObjectId(order_id)})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
@@ -439,11 +432,22 @@ async def track_order(order_id: str):
     order["user_id"] = str(order["user_id"])
     order["delivery_boy_id"] = str(order.get("delivery_boy_id", ""))
 
+    # Fetch user info
+    user = await db["app_user"].find_one({"_id": ObjectId(order["user_id"])})
+    order["user"] = {
+        "name": user.get("name") if user else "Unknown",
+        "email": user.get("email") if user else None,
+        "phone": user.get("phone_number") if user else None,
+        # "address": user.get("address") if user else None,
+        "profile_pic": user.get("photo_url") if user else None,
+    }
+
     # Fetch chef info
     chef = await db["chef_user"].find_one({"_id": ObjectId(order["chef_id"])})
     order["chef"] = {
         "name": chef.get("name") if chef else "Unknown",
         "profile_pic": chef.get("photo_url") if chef else None,
+        "phone": chef.get("phone_number") if user else None,
         "location": chef.get("location") if chef else None
     }
 
