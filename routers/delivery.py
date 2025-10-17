@@ -478,3 +478,57 @@ async def track_order(order_id: str):
         item["chef_id"] = str(item["chef_id"])
 
     return {"status": "success", "order": order}
+
+
+
+
+@router.get("/delivery/orders/delivered")
+async def get_delivered_orders(current_user: dict = Depends(get_current_user)):
+    """
+    Fetch all delivered orders for the logged-in delivery boy.
+    """
+    if current_user["role"] != "delivery":
+        raise HTTPException(status_code=403, detail="Only delivery users can access this")
+
+    delivery_boy_id = str(current_user["_id"])
+
+    # Fetch all delivered orders assigned to this delivery user
+    orders = await db["orders"].find(
+        {"delivery_boy_id": delivery_boy_id, "delivery_status": "delivered"}
+    ).to_list(length=None)
+
+    result = []
+
+    for order in orders:
+        order["_id"] = str(order["_id"])
+        order["user_id"] = str(order["user_id"])
+        order["chef_id"] = str(order["chef_id"])
+        order["delivery_boy_id"] = str(order.get("delivery_boy_id", ""))
+
+        # Fetch user info
+        user = await db["app_user"].find_one({"_id": ObjectId(order["user_id"])})
+        order["user"] = {
+            "name": user.get("name") if user else "Unknown",
+            "email": user.get("email") if user else None,
+            "phone": user.get("phone_number") if user else None,
+            "profile_pic": user.get("photo_url") if user else None,
+            "address": user.get("address") if user else None,
+        }
+
+        # Fetch chef info
+        chef = await db["chef_user"].find_one({"_id": ObjectId(order["chef_id"])})
+        order["chef"] = {
+            "name": chef.get("name") if chef else "Unknown",
+            "phone": chef.get("phone_number") if chef else None,
+            "profile_pic": chef.get("photo_url") if chef else None,
+            "location": chef.get("location") if chef else None,
+        }
+
+        # Convert ObjectId in order items
+        for item in order.get("items", []):
+            item["food_id"] = str(item["food_id"])
+            item["chef_id"] = str(item["chef_id"])
+
+        result.append(order)
+
+    return {"status": "success", "orders": result}
