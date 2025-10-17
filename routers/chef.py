@@ -378,27 +378,60 @@ async def get_my_food_items(current_user: dict = Depends(get_current_user)):
 
 
 
-#-----------myorders------------------#
-def convert_object_ids(orders: list):
-    """Convert all ObjectId fields to strings for JSON serialization."""
-    for o in orders:
-        o["_id"] = str(o["_id"])
-        for item in o.get("items", []):
-            if "_id" in item:
-                item["_id"] = str(item["_id"])
-        if "address" in o and "_id" in o["address"]:
-            o["address"]["_id"] = str(o["address"]["_id"])
-    return orders
+
+def convert_object_ids(data):
+    """Recursively convert all ObjectId fields to strings."""
+    if isinstance(data, list):
+        return [convert_object_ids(i) for i in data]
+    elif isinstance(data, dict):
+        new_data = {}
+        for k, v in data.items():
+            if isinstance(v, ObjectId):
+                new_data[k] = str(v)
+            else:
+                new_data[k] = convert_object_ids(v)
+        return new_data
+    else:
+        return data
 
 
 @router.get("/chef/orders/incoming")
 async def get_incoming_orders(current_user: dict = Depends(get_current_user)):
     if current_user["role"] != "chef":
         raise HTTPException(status_code=403, detail="Only chefs can view orders")
+
     chef_id = str(current_user["_id"])
-    orders = await db["orders"].find({"chef_id": chef_id, "status": {"$in": ["new", "pending"]}}).to_list(length=None)
-    print(orders)
-    return {"status": "success", "orders": convert_object_ids(orders)}
+
+    # Fetch orders for this chef
+    orders = await db["orders"].find(
+        {"chef_id": chef_id, "status": {"$in": ["new", "pending"]}}
+    ).to_list(length=None)
+
+    enriched_orders = []
+    for order in orders:
+        user_id = order.get("user_id")
+        user_details = None
+
+        # Fetch user details if exists
+        if user_id:
+            user_details = await db["app_user"].find_one(
+                {"_id": ObjectId(user_id)},
+                {
+                    "_id": 0,  # exclude id to avoid redundancy
+                    "name": 1,
+                    "email": 1,
+                    "phone_number": 1,
+                    "photo_url": 1,
+                    # "address": 1
+                },
+            )
+
+        # Add user details to order
+        order["user_details"] = user_details or {}
+
+        enriched_orders.append(order)
+
+    return {"status": "success", "orders": convert_object_ids(enriched_orders)}
 
 
 @router.get("/chef/orders/ongoing")
