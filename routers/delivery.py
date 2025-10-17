@@ -280,52 +280,65 @@ async def get_order(order_id: str, current_user: dict = Depends(get_current_user
 @router.put("/orderdeliveryupdate/{order_id}/status")
 async def update_order_status(
     order_id: str,
-    status: str = Body(..., embed=True),  # JSON body: {"status": "picked"}
+    status: str = Body(..., embed=True),  # JSON body: {"status": "chef_arrived"}
     current_user: dict = Depends(get_current_user)
 ):
-    # Only delivery boys can access
+    """
+    Update the delivery status of an order.
+    Only delivery users can access this endpoint.
+    """
+    # ✅ Role check
     if current_user.get("role") != "delivery":
         raise HTTPException(status_code=403, detail="Only delivery users can update status")
 
-    # Validate ObjectId
+    # ✅ Validate ObjectId
     try:
         oid = ObjectId(order_id)
     except errors.InvalidId:
         raise HTTPException(status_code=400, detail="Invalid order ID")
 
-    # Fetch the order
+    # ✅ Fetch the order
     order = await db["orders"].find_one({"_id": oid})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
 
-    # Ensure order is assigned to this delivery boy
+    # ✅ Ensure this delivery boy owns the order
     if str(order.get("delivery_boy_id")) != str(current_user["_id"]):
         raise HTTPException(status_code=403, detail="You cannot update this order")
 
-    # Allowed status updates
-    allowed_statuses = ["assigned", "picked", "delivered"]
+    # ✅ Allowed status updates (expanded flow)
+    allowed_statuses = [
+        "assigned",        # When order assigned to delivery boy
+        "chef_arrived",    # When reached restaurant
+        "picked_up",       # When picked up from restaurant
+        "out_for_delivery",# Optional intermediate
+        "delivered"        # When delivered to customer
+    ]
+
     if status not in allowed_statuses:
         raise HTTPException(status_code=400, detail=f"Status must be one of {allowed_statuses}")
 
+    # ✅ Build update data
     update_data = {"delivery_status": status}
 
-    # If delivery completed, mark the overall order as completed
+    # ✅ If delivered, mark order as completed
     if status == "delivered":
         update_data["status"] = "completed"
 
-    # Update order document
-    await db["orders"].update_one(
-        {"_id": oid},
-        {"$set": update_data}
-    )
+    # ✅ Perform update
+    result = await db["orders"].update_one({"_id": oid}, {"$set": update_data})
 
+    if result.modified_count == 0:
+        raise HTTPException(status_code=500, detail="Failed to update order status")
+
+    # ✅ Return updated response
     return {
         "status": "success",
         "order_id": str(order["_id"]),
         "new_delivery_status": status,
-        "new_order_status": update_data.get("status", order.get("status"))
+        "new_order_status": update_data.get("status", order.get("status")),
+        "updated_by": current_user["name"]
     }
-
 #---------------------DELIVEERY BOY ORDER HISTORY-----------------#
 # delivery boy order tracking
 @router.get("/deliveryboy/orders")
