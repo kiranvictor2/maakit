@@ -895,7 +895,117 @@ async def create_order(current_user: dict = Depends(get_current_user)):
         "order": order
     }
 
+#-------------------------------create payment order----------------------#
+import razorpay
+RAZORPAY_KEY_ID="rzp_test_RUr8dhRKDyeQXv"
+RAZORPAY_KEY_SECRET="7FH59C9NbdLj5r0NVRDfrpRi"
+@router.post("/orders/create-payment-order")
+async def create_payment_order(current_user: dict = Depends(get_current_user)):
+    if current_user["role"] != "user":
+        raise HTTPException(status_code=403, detail="Only users can create orders")
 
+    user_id = str(current_user["_id"])
+
+    # Fetch user's cart
+    cart = await db["carts"].find_one({"user_id": user_id})
+    if not cart or not cart.get("items"):
+        raise HTTPException(status_code=400, detail="Cart is empty")
+
+    # Fetch the default address
+    address = await db["addresses"].find_one({"user_id": user_id, "is_default": True})
+    if not address:
+        raise HTTPException(status_code=404, detail="No default address found")
+
+    # Razorpay client
+    client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
+
+    # Convert total price to paise
+    amount_paise = int(cart["total_price"]) * 100
+
+    # Create Razorpay Order
+    razorpay_order = client.order.create({
+        "amount": amount_paise,
+        "currency": "INR",
+        "receipt": f"order_{user_id}",
+        "payment_capture": 1
+    })
+
+    # Store temporary order info in DB (status: created)
+    temp_order = {
+        "user_id": user_id,
+        "cart_items": cart["items"],
+        "total_price": cart["total_price"],
+        "address": address,
+        "chef_id": cart["items"][0]["chef_id"],
+        "razorpay_order_id": razorpay_order["id"],
+        "status": "created",
+        "created_at": datetime.utcnow()
+    }
+
+    await db["temp_orders"].insert_one(temp_order)
+
+    return {
+        "key": RAZORPAY_KEY_ID,
+        "razorpay_order_id": razorpay_order["id"],
+        "amount": amount_paise,
+        "currency": "INR",
+        "user": {
+            "name": current_user["name"],
+            "email": current_user["email"]
+        }
+    }
+
+#-------------------------------verify payment----------------------#
+@router.post("/orders/verify-payment")
+async def verify_payment(payload: dict, current_user: dict = Depends(get_current_user)):
+    from hashlib import sha256
+    import hmac
+
+    order_id = payload.get("razorpay_order_id")
+    payment_id = payload.get("razorpay_payment_id")
+    signature = payload.get("razorpay_signature")
+
+    body = order_id + "|" + payment_id
+    expected_signature = hmac.new(
+        bytes(RAZORPAY_KEY_SECRET, "utf-8"),
+        bytes(body, "utf-8"),
+        sha256
+    ).hexdigest()
+
+    if expected_signature != signature:
+        raise HTTPException(status_code=400, detail="Invalid payment signature")
+
+    # Get temp order
+    temp_order = await db["temp_orders"].find_one({"razorpay_order_id": order_id})
+    if not temp_order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    # Create final order in orders collection
+    final_order = {
+        "user_id": temp_order["user_id"],
+        "chef_id": temp_order["chef_id"],
+        "items": temp_order["cart_items"],
+        "total_price": temp_order["total_price"],
+        "address": temp_order["address"],
+        "status": "paid",
+        "chef_status": "pending",
+        "delivery_status": "pending",
+        "razorpay_order_id": order_id,
+        "razorpay_payment_id": payment_id,
+        "created_at": datetime.utcnow()
+    }
+
+    await db["orders"].insert_one(final_order)
+
+    # Clear the cart
+    await db["carts"].delete_one({"user_id": temp_order["user_id"]})
+
+    # Remove temp entry
+    await db["temp_orders"].delete_one({"razorpay_order_id": order_id})
+
+    return {"status": "success", "message": "Payment verified and order placed successfully"}
+
+#-------------------------------get all orders--------------------------#
 @router.get("/orders/user")
 async def get_user_orders(current_user: dict = Depends(get_current_user)):
     """Get all orders placed by the user."""
