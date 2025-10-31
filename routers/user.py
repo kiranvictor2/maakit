@@ -752,21 +752,66 @@ async def remove_from_cart(item: CartItemRequest, current_user: dict = Depends(g
 
 
 #---------------------------------------------------get cart item-------------------------------#
+# @router.get("/cart/me")
+# async def get_my_cart(current_user: dict = Depends(get_current_user)):
+#     user_id = str(current_user["_id"])  # ensure string
+
+#     # ✅ Query with string user_id (not ObjectId)
+#     cart = await db["carts"].find_one({"user_id": user_id})
+#     if not cart:
+#         return {"status": "success", "cart": []}
+
+#     # ✅ Convert ObjectIds to strings
+#     cart["_id"] = str(cart["_id"])
+#     cart["user_id"] = str(cart["user_id"])
+#     for item in cart.get("items", []):
+#         if "food_id" in item:
+#             item["food_id"] = str(item["food_id"])
+
+#     return {"status": "success", "cart": cart}
+
+
+
 @router.get("/cart/me")
 async def get_my_cart(current_user: dict = Depends(get_current_user)):
     user_id = str(current_user["_id"])  # ensure string
 
-    # ✅ Query with string user_id (not ObjectId)
+    # ✅ Get user's cart
     cart = await db["carts"].find_one({"user_id": user_id})
     if not cart:
         return {"status": "success", "cart": []}
 
-    # ✅ Convert ObjectIds to strings
+    # Convert ObjectIds to strings
     cart["_id"] = str(cart["_id"])
     cart["user_id"] = str(cart["user_id"])
+
+    # ✅ Add chef details for each item
     for item in cart.get("items", []):
         if "food_id" in item:
             item["food_id"] = str(item["food_id"])
+
+        if "chef_id" in item:
+            chef_id = item["chef_id"]
+            chef = await db["chef_user"].find_one({"_id": ObjectId(chef_id)})
+
+            if chef:
+                # Convert ObjectId and embed details
+                chef["_id"] = str(chef["_id"])
+                if "location" in chef and "coordinates" in chef["location"]:
+                    chef["location"]["coordinates"] = list(chef["location"]["coordinates"])
+                item["chef_details"] = {
+                    "id": chef["_id"],
+                    "name": chef.get("name"),
+                    "email": chef.get("email"),
+                    "phone_number": chef.get("phone_number"),
+                    "photo_url": chef.get("photo_url"),
+                    "native_place": chef.get("native_place"),
+                    "food_styles": chef.get("food_styles"),
+                    "location": chef.get("location")
+                }
+
+            # remove the plain chef_id
+            del item["chef_id"]
 
     return {"status": "success", "cart": cart}
 
