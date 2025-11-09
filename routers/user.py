@@ -12,6 +12,7 @@ from datetime import datetime
 import asyncio
 import uuid
 from typing import List, Optional
+from routers.commonfunction import calculate_distance,calculate_delivery_fee
 
 router = APIRouter()
 
@@ -772,20 +773,84 @@ async def remove_from_cart(item: CartItemRequest, current_user: dict = Depends(g
 
 
 
+# @router.get("/cart/me")
+# async def get_my_cart(current_user: dict = Depends(get_current_user)):
+#     user_id = str(current_user["_id"])  # ensure string
+
+#     # ✅ Get user's cart
+#     cart = await db["carts"].find_one({"user_id": user_id})
+#     if not cart:
+#         return {"status": "success", "cart": []}
+
+#     # Convert ObjectIds to strings
+#     cart["_id"] = str(cart["_id"])
+#     cart["user_id"] = str(cart["user_id"])
+
+#     # ✅ Add chef details for each item
+#     for item in cart.get("items", []):
+#         if "food_id" in item:
+#             item["food_id"] = str(item["food_id"])
+
+#         if "chef_id" in item:
+#             chef_id = item["chef_id"]
+#             chef = await db["chef_user"].find_one({"_id": ObjectId(chef_id)})
+
+#             if chef:
+#                 # Convert ObjectId and embed details
+#                 chef["_id"] = str(chef["_id"])
+#                 if "location" in chef and "coordinates" in chef["location"]:
+#                     chef["location"]["coordinates"] = list(chef["location"]["coordinates"])
+#                 item["chef_details"] = {
+#                     "id": chef["_id"],
+#                     "name": chef.get("name"),
+#                     "email": chef.get("email"),
+#                     "phone_number": chef.get("phone_number"),
+#                     "photo_url": chef.get("photo_url"),
+#                     "native_place": chef.get("native_place"),
+#                     "food_styles": chef.get("food_styles"),
+#                     "location": chef.get("location")
+#                 }
+
+#             # remove the plain chef_id
+#             del item["chef_id"]
+
+#     return {"status": "success", "cart": cart}
+
+
+
+
+
+
+#================================================new cart wth calculations=============================#
 @router.get("/cart/me")
 async def get_my_cart(current_user: dict = Depends(get_current_user)):
-    user_id = str(current_user["_id"])  # ensure string
+    user_id = str(current_user["_id"])
 
-    # ✅ Get user's cart
+    # --- Fetch user's cart ---
     cart = await db["carts"].find_one({"user_id": user_id})
-    if not cart:
+    if not cart or not cart.get("items"):
         return {"status": "success", "cart": []}
 
-    # Convert ObjectIds to strings
     cart["_id"] = str(cart["_id"])
     cart["user_id"] = str(cart["user_id"])
+    subtotal = float(cart.get("total_price", 0))
 
-    # ✅ Add chef details for each item
+    # --- Fetch default address ---
+    user_address = await db["addresses"].find_one({"user_id": user_id, "is_default": True})
+    if not user_address:
+        raise HTTPException(status_code=404, detail="No default address found")
+
+    # Handle both formats (direct or nested coordinates)
+    if "coordinates" in user_address:
+        user_lon, user_lat = user_address["coordinates"]
+    elif "location" in user_address and "coordinates" in user_address["location"]:
+        user_lon, user_lat = user_address["location"]["coordinates"]
+    else:
+        raise HTTPException(status_code=404, detail="No coordinates found in user address")
+
+    max_distance = 0
+
+    # --- Add chef details and calculate distances ---
     for item in cart.get("items", []):
         if "food_id" in item:
             item["food_id"] = str(item["food_id"])
@@ -793,12 +858,17 @@ async def get_my_cart(current_user: dict = Depends(get_current_user)):
         if "chef_id" in item:
             chef_id = item["chef_id"]
             chef = await db["chef_user"].find_one({"_id": ObjectId(chef_id)})
-
             if chef:
-                # Convert ObjectId and embed details
                 chef["_id"] = str(chef["_id"])
+
                 if "location" in chef and "coordinates" in chef["location"]:
-                    chef["location"]["coordinates"] = list(chef["location"]["coordinates"])
+                    chef_lon, chef_lat = chef["location"]["coordinates"]
+
+                    # Calculate distance in KM
+                    distance_km = calculate_distance(user_lat, user_lon, chef_lat, chef_lon)
+                    item["distance_km"] = round(distance_km, 2)
+                    max_distance = max(max_distance, distance_km)
+
                 item["chef_details"] = {
                     "id": chef["_id"],
                     "name": chef.get("name"),
@@ -807,13 +877,33 @@ async def get_my_cart(current_user: dict = Depends(get_current_user)):
                     "photo_url": chef.get("photo_url"),
                     "native_place": chef.get("native_place"),
                     "food_styles": chef.get("food_styles"),
-                    "location": chef.get("location")
+                    "location": chef.get("location"),
                 }
 
-            # remove the plain chef_id
             del item["chef_id"]
 
+    # --- Use helper to calculate delivery fee ---
+    delivery_fee = calculate_delivery_fee(max_distance)
+
+    # --- Platform fee & GST ---
+    PLATFORM_FEE_PERCENT = 10
+    GST_PERCENT = 18
+
+    platform_fee = round((PLATFORM_FEE_PERCENT / 100) * subtotal, 2)
+    gst_amount = round((GST_PERCENT / 100) * platform_fee, 2)
+    grand_total = round(subtotal + platform_fee + gst_amount + delivery_fee, 2)
+
+    # --- Billing summary ---
+    cart["billing_summary"] = {
+        "subtotal": round(subtotal, 2),
+        "platform_fee": platform_fee,
+        "gst": gst_amount,
+        "delivery_fee": delivery_fee,
+        "grand_total": grand_total,
+    }
+
     return {"status": "success", "cart": cart}
+
 
 
 #-----------------------------------------Address---------------------------------------#
@@ -951,23 +1041,24 @@ async def create_payment_order(current_user: dict = Depends(get_current_user)):
 
     user_id = str(current_user["_id"])
 
-    # Fetch user's cart
     cart = await db["carts"].find_one({"user_id": user_id})
     if not cart or not cart.get("items"):
         raise HTTPException(status_code=400, detail="Cart is empty")
 
-    # Fetch the default address
     address = await db["addresses"].find_one({"user_id": user_id, "is_default": True})
     if not address:
         raise HTTPException(status_code=404, detail="No default address found")
+    if not address.get("coordinates") or len(address["coordinates"]) != 2:
+        raise HTTPException(status_code=400, detail="No default address with location found")
 
-    # Razorpay client
+    # Optional: calculate delivery fee
+    # from commonfunction import calculate_delivery_fee
+    # delivery_fee = calculate_delivery_fee(address["coordinates"], chef_location)
+
+    total_price = int(cart["total_price"])
+    amount_paise = total_price * 100  # or include fees if needed
+
     client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
-
-    # Convert total price to paise
-    amount_paise = int(cart["total_price"]) * 100
-
-    # Create Razorpay Order
     razorpay_order = client.order.create({
         "amount": amount_paise,
         "currency": "INR",
@@ -975,11 +1066,10 @@ async def create_payment_order(current_user: dict = Depends(get_current_user)):
         "payment_capture": 1
     })
 
-    # Store temporary order info in DB (status: created)
     temp_order = {
         "user_id": user_id,
         "cart_items": cart["items"],
-        "total_price": cart["total_price"],
+        "total_price": total_price,
         "address": address,
         "chef_id": cart["items"][0]["chef_id"],
         "razorpay_order_id": razorpay_order["id"],
@@ -1000,7 +1090,7 @@ async def create_payment_order(current_user: dict = Depends(get_current_user)):
         }
     }
 
-#-------------------------------verify payment----------------------#
+
 @router.post("/orders/verify-payment")
 async def verify_payment(payload: dict, current_user: dict = Depends(get_current_user)):
     from hashlib import sha256
@@ -1020,12 +1110,15 @@ async def verify_payment(payload: dict, current_user: dict = Depends(get_current
     if expected_signature != signature:
         raise HTTPException(status_code=400, detail="Invalid payment signature")
 
-    # Get temp order
     temp_order = await db["temp_orders"].find_one({"razorpay_order_id": order_id})
     if not temp_order:
         raise HTTPException(status_code=404, detail="Order not found")
 
-    # Create final order in orders collection
+    # Prevent duplicate order
+    existing = await db["orders"].find_one({"razorpay_order_id": order_id})
+    if existing:
+        raise HTTPException(status_code=400, detail="Order already processed")
+
     final_order = {
         "user_id": temp_order["user_id"],
         "chef_id": temp_order["chef_id"],
@@ -1037,15 +1130,12 @@ async def verify_payment(payload: dict, current_user: dict = Depends(get_current
         "delivery_status": "pending",
         "razorpay_order_id": order_id,
         "razorpay_payment_id": payment_id,
-        "created_at": datetime.utcnow()
+        "payment_verified_at": datetime.utcnow(),
+        "created_at": temp_order["created_at"]
     }
 
     await db["orders"].insert_one(final_order)
-
-    # Clear the cart
     await db["carts"].delete_one({"user_id": temp_order["user_id"]})
-
-    # Remove temp entry
     await db["temp_orders"].delete_one({"razorpay_order_id": order_id})
 
     return {"status": "success", "message": "Payment verified and order placed successfully"}
