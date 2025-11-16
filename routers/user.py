@@ -1,5 +1,5 @@
 # routers/user.py
-from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect,Form,File,UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect,Form,File,UploadFile,status
 from bson import ObjectId
 from auth.jwt_handler import get_current_user
 from models.user import FoodFilter   # adjust path to your actual file
@@ -11,8 +11,8 @@ from auth.utils import create_access_token  # ✅ Import token creator
 from datetime import datetime
 import asyncio
 import uuid
-from typing import List, Optional
-from routers.commonfunction import calculate_distance,calculate_delivery_fee
+from typing import List, Optional,Dict,Any
+from routers.commonfunction import calculate_distance,calculate_delivery_fee,calculate_financials
 
 router = APIRouter()
 
@@ -822,90 +822,113 @@ async def remove_from_cart(item: CartItemRequest, current_user: dict = Depends(g
 
 
 #================================================new cart wth calculations=============================#
-@router.get("/cart/me")
-async def get_my_cart(current_user: dict = Depends(get_current_user)):
-    user_id = str(current_user["_id"])
+@router.get("/cart/me", status_code=status.HTTP_200_OK)
+async def get_my_cart(current_user: dict = Depends(get_current_user)) -> Dict[str, Any]:
+    """
+    Return the current user's cart with chef details, distances and billing summary.
+    """
+    user_id = str(current_user.get("_id"))
 
-    # --- Fetch user's cart ---
+    # fetch cart
     cart = await db["carts"].find_one({"user_id": user_id})
     if not cart or not cart.get("items"):
         return {"status": "success", "cart": []}
 
-    cart["_id"] = str(cart["_id"])
-    cart["user_id"] = str(cart["user_id"])
-    subtotal = float(cart.get("total_price", 0))
+    # normalize ids and subtotal
+    cart["_id"] = str(cart.get("_id"))
+    cart["user_id"] = str(cart.get("user_id"))
+    try:
+        subtotal = float(cart.get("total_price", 0))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid cart total_price")
 
-    # --- Fetch default address ---
+    # Fetch default address
     user_address = await db["addresses"].find_one({"user_id": user_id, "is_default": True})
     if not user_address:
         raise HTTPException(status_code=404, detail="No default address found")
 
-    # Handle both formats (direct or nested coordinates)
+    # Coordinates: support multiple address shapes
     if "coordinates" in user_address:
         user_lon, user_lat = user_address["coordinates"]
-    elif "location" in user_address and "coordinates" in user_address["location"]:
+    elif "location" in user_address and isinstance(user_address["location"], dict) and "coordinates" in user_address["location"]:
         user_lon, user_lat = user_address["location"]["coordinates"]
     else:
         raise HTTPException(status_code=404, detail="No coordinates found in user address")
 
-    max_distance = 0
+    max_distance = 0.0
+    items = cart.get("items", [])
 
-    # --- Add chef details and calculate distances ---
-    for item in cart.get("items", []):
-        if "food_id" in item:
+    # iterate and enrich items
+    for item in items:
+        # stringify food_id if present
+        if "food_id" in item and item["food_id"] is not None:
             item["food_id"] = str(item["food_id"])
 
+        chef_id = item.get("chef_id")
+        chef_doc = None
+        if chef_id:
+            try:
+                chef_doc = await db["chef_user"].find_one({"_id": ObjectId(chef_id)})
+            except Exception:
+                # invalid ObjectId or lookup failed; chef_doc remains None
+                chef_doc = None
+
+        if chef_doc:
+            # normalize chef id
+            chef_doc["_id"] = str(chef_doc["_id"])
+
+            # get chef coordinates (support both shapes)
+            chef_lon = chef_lat = None
+            if "location" in chef_doc and isinstance(chef_doc["location"], dict) and "coordinates" in chef_doc["location"]:
+                chef_lon, chef_lat = chef_doc["location"]["coordinates"]
+            elif "coordinates" in chef_doc:
+                chef_lon, chef_lat = chef_doc["coordinates"]
+
+            # calculate distance if coordinates exist
+            if chef_lon is not None and chef_lat is not None:
+                # NOTE: confirm calculate_distance signature in your utils; here I call as (lat1, lon1, lat2, lon2)
+                distance_km = calculate_distance(user_lat, user_lon, chef_lat, chef_lon)
+                item["distance_km"] = round(distance_km, 2)
+                max_distance = max(max_distance, distance_km)
+
+            # attach chef details (select fields only)
+            item["chef_details"] = {
+                "id": chef_doc.get("_id"),
+                "name": chef_doc.get("name"),
+                "email": chef_doc.get("email"),
+                "phone_number": chef_doc.get("phone_number"),
+                "photo_url": chef_doc.get("photo_url"),
+                "native_place": chef_doc.get("native_place"),
+                "food_styles": chef_doc.get("food_styles"),
+                "location": chef_doc.get("location"),
+            }
+        else:
+            # Chef missing: attach minimal info and distance as None
+            item["chef_details"] = None
+            item["distance_km"] = None
+
+        # remove chef_id from payload returned to client
         if "chef_id" in item:
-            chef_id = item["chef_id"]
-            chef = await db["chef_user"].find_one({"_id": ObjectId(chef_id)})
-            if chef:
-                chef["_id"] = str(chef["_id"])
+            item.pop("chef_id", None)
 
-                if "location" in chef and "coordinates" in chef["location"]:
-                    chef_lon, chef_lat = chef["location"]["coordinates"]
-
-                    # Calculate distance in KM
-                    distance_km = calculate_distance(user_lat, user_lon, chef_lat, chef_lon)
-                    item["distance_km"] = round(distance_km, 2)
-                    max_distance = max(max_distance, distance_km)
-
-                item["chef_details"] = {
-                    "id": chef["_id"],
-                    "name": chef.get("name"),
-                    "email": chef.get("email"),
-                    "phone_number": chef.get("phone_number"),
-                    "photo_url": chef.get("photo_url"),
-                    "native_place": chef.get("native_place"),
-                    "food_styles": chef.get("food_styles"),
-                    "location": chef.get("location"),
-                }
-
-            del item["chef_id"]
-
-    # --- Use helper to calculate delivery fee ---
+    # compute delivery fee using the max distance found
     delivery_fee = calculate_delivery_fee(max_distance)
 
-    # --- Platform fee & GST ---
-    PLATFORM_FEE_PERCENT = 10
-    GST_PERCENT = 18
+    # Apply financial engine
+    financials = calculate_financials(
+        subtotal=subtotal,
+        delivery_fee=delivery_fee,
+        platform_fee_percent=20,  # adjust if your platform fee differs
+        gst_percent=0,
+    )
 
-    platform_fee = round((PLATFORM_FEE_PERCENT / 100) * subtotal, 2)
-    gst_amount = round((GST_PERCENT / 100) * platform_fee, 2)
-    grand_total = round(subtotal + platform_fee + gst_amount + delivery_fee, 2)
-
-    # --- Billing summary ---
-    cart["billing_summary"] = {
-        "subtotal": round(subtotal, 2),
-        "platform_fee": platform_fee,
-        "gst": gst_amount,
-        "delivery_fee": delivery_fee,
-        "grand_total": grand_total,
-    }
+    cart["billing_summary"] = financials.get("billing_summary", {})
+    cart["cash_flows"] = financials.get("cash_flows", {})
+    cart["items"] = items
+    cart["delivery_fee"] = delivery_fee
+    cart["max_distance_km"] = round(max_distance, 2)
 
     return {"status": "success", "cart": cart}
-
-
-
 #-----------------------------------------Address---------------------------------------#
 # -------------------
 # Add a new address
@@ -982,54 +1005,126 @@ async def delete_address(address_id: str, current_user: dict = Depends(get_curre
 
 
 #-----------------------------------------Create Order------------------------------------#
+def sanitize_doc(value: Any) -> Any:
+    """
+    Recursively convert BSON/Object types to JSON-safe types:
+      - ObjectId -> str
+      - datetime -> ISO string
+      - dict/list -> recurse
+    """
+    if isinstance(value, ObjectId):
+        return str(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {k: sanitize_doc(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [sanitize_doc(v) for v in value]
+    return value
 
-@router.post("/orders/create")
-async def create_order(current_user: dict = Depends(get_current_user)):
-    if current_user["role"] != "user":
+
+@router.post("/orders/create", status_code=status.HTTP_201_CREATED)
+async def create_order(current_user: dict = Depends(get_current_user)) -> Dict:
+    # Only allow normal users to create orders
+    if current_user.get("role") != "user":
         raise HTTPException(status_code=403, detail="Only users can create orders")
 
     user_id = str(current_user["_id"])
 
-    # Fetch user's cart
+    # fetch cart
     cart = await db["carts"].find_one({"user_id": user_id})
     if not cart or not cart.get("items"):
         raise HTTPException(status_code=400, detail="Cart is empty")
 
-    # Fetch the default address
+    # fetch default address
     address = await db["addresses"].find_one({"user_id": user_id, "is_default": True})
     if not address:
         raise HTTPException(status_code=404, detail="No default address found")
 
-    # Convert ObjectId to string
-    address["_id"] = str(address["_id"])
+    # extract coordinates from address - support both shapes you've used
+    if "coordinates" in address:
+        user_lon, user_lat = address["coordinates"]
+    elif "location" in address and isinstance(address["location"], dict) and "coordinates" in address["location"]:
+        user_lon, user_lat = address["location"]["coordinates"]
+    else:
+        raise HTTPException(status_code=404, detail="No coordinates found in address")
 
-    chef_id = cart["items"][0]["chef_id"]  # assume same chef for all items
+    # validate chefs in cart: require a single chef for this order (business rule)
+    items = cart.get("items", [])
+    chef_ids_in_cart = {str(item.get("chef_id")) for item in items if item.get("chef_id")}
+    if not chef_ids_in_cart:
+        raise HTTPException(status_code=400, detail="Cart items missing chef information")
+    if len(chef_ids_in_cart) > 1:
+        raise HTTPException(status_code=400, detail="Cart contains items from multiple chefs — cannot create single order")
 
-    # Create new order
-    order = {
+    chef_id_str = next(iter(chef_ids_in_cart))
+    try:
+        chef_obj_id = ObjectId(chef_id_str)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid chef id in cart")
+
+    # fetch chef
+    chef = await db["chef_user"].find_one({"_id": chef_obj_id})
+    if not chef:
+        raise HTTPException(status_code=404, detail="Chef not found")
+
+    # chef coordinates fetch (support both shapes)
+    chef_lon = chef_lat = None
+    if "location" in chef and isinstance(chef["location"], dict) and "coordinates" in chef["location"]:
+        chef_lon, chef_lat = chef["location"]["coordinates"]
+    elif "coordinates" in chef:
+        chef_lon, chef_lat = chef["coordinates"]
+
+    max_distance = 0.0
+    if chef_lon is not None and chef_lat is not None:
+        # confirm your calculate_distance signature; using (lat1, lon1, lat2, lon2)
+        distance_km = calculate_distance(user_lat, user_lon, chef_lat, chef_lon)
+        max_distance = max(max_distance, distance_km)
+
+    delivery_fee = calculate_delivery_fee(max_distance)
+
+    # Ensure subtotal is numeric
+    try:
+        subtotal = float(cart.get("total_price", 0.0))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid cart total_price")
+
+    financials = calculate_financials(
+        subtotal=subtotal,
+        delivery_fee=delivery_fee,
+        platform_fee_percent=20.0,
+        gst_percent=0.0
+    )
+
+    order_doc = {
         "user_id": user_id,
-        "chef_id": chef_id,
-        "items": cart["items"],
-        "total_price": cart["total_price"],
-        "address": address,          # include the default address
+        "chef_id": chef_id_str,                    # stringified
+        "items": items,
+        "total_price": subtotal + delivery_fee,    # set final total explicitly
+        "billing_summary": financials.get("billing_summary", {}),
+        "cash_flows": financials.get("cash_flows", {}),
+        "address": address,                        # may contain ObjectId -> sanitized later
         "status": "pending",
         "chef_status": "pending",
         "delivery_status": "pending",
-        "created_at": datetime.utcnow()
+        "created_at": datetime.utcnow(),
     }
 
-    result = await db["orders"].insert_one(order)
-    order["_id"] = str(result.inserted_id)
+    # Insert order first
+    result = await db["orders"].insert_one(order_doc)
+    if not result or not getattr(result, "inserted_id", None):
+        raise HTTPException(status_code=500, detail="Failed to create order")
 
-    # Clear the cart
+    # attach inserted id as str (but still sanitize later to catch extras)
+    order_doc["_id"] = result.inserted_id
+
+    # Clear cart after successful insert
     await db["carts"].delete_one({"user_id": user_id})
 
-    return {
-        "status": "success",
-        "message": "Order created successfully",
-        "order": order
-    }
+    # Sanitize everything (convert ObjectId/datetime to JSON-safe types)
+    safe_order = sanitize_doc(order_doc)
 
+    return {"status": "success", "message": "Order created successfully", "order": safe_order}
 #-------------------------------create payment order----------------------#
 import razorpay
 RAZORPAY_KEY_ID="rzp_test_RUr8dhRKDyeQXv"

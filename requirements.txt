@@ -1,9 +1,6 @@
-fastapi[standard]
+fastapi
 uvicorn
-python-dotenv
 motor
-pydantic<2.10
-pydantic-core<2.10
 python-jose
-passlib[bcrypt]
 python-multipart
+pydantic
