@@ -1,5 +1,5 @@
 # routers/user.py
-from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect,Form,File,UploadFile,status
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect,Form,File,UploadFile,status,Body
 from bson import ObjectId
 from auth.jwt_handler import get_current_user
 from models.user import FoodFilter   # adjust path to your actual file
@@ -1129,111 +1129,305 @@ async def create_order(current_user: dict = Depends(get_current_user)) -> Dict:
 import razorpay
 RAZORPAY_KEY_ID="rzp_test_RUr8dhRKDyeQXv"
 RAZORPAY_KEY_SECRET="7FH59C9NbdLj5r0NVRDfrpRi"
+
+
+def _to_paise(value: Any) -> int:
+    """Coerce numeric rupees value to paise integer. Raises HTTPException on bad input."""
+    try:
+        # allow strings/numbers; use int() to match your original approach
+        rupees = float(value)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid cart total_price")
+    paise = int(round(rupees * 100))
+    if paise <= 0:
+        raise HTTPException(status_code=400, detail="Cart total must be positive")
+    return paise
+
+
+def _get_address_coordinates(address: Dict[str, Any]):
+    """Support both address['coordinates'] and address['location']['coordinates'] shapes."""
+    if not address:
+        return None
+    if "coordinates" in address and isinstance(address["coordinates"], (list, tuple)) and len(address["coordinates"]) == 2:
+        return address["coordinates"]
+    if "location" in address and isinstance(address["location"], dict) and "coordinates" in address["location"] \
+       and isinstance(address["location"]["coordinates"], (list, tuple)) and len(address["location"]["coordinates"]) == 2:
+        return address["location"]["coordinates"]
+    return None
+
+def sanitize_doc(value: Any) -> Any:
+    """Recursively convert ObjectId -> str and datetime -> ISO for JSON safety."""
+    from datetime import datetime as _dt
+    if isinstance(value, ObjectId):
+        return str(value)
+    if isinstance(value, _dt):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {k: sanitize_doc(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [sanitize_doc(v) for v in value]
+    return value
+
+def _sanitize_items(items):
+    """
+    Return a deep-copied, sanitized list of items with ObjectId -> str conversions
+    and ensure numeric/primitive values are used for stored temp_order.
+    """
+    sanitized = []
+    for it in items:
+        # shallow copy to avoid mutating original cart
+        item = dict(it)
+        # convert possible ObjectId fields to str
+        for key in ("food_id", "chef_id", "_id"):
+            if key in item and item[key] is not None:
+                try:
+                    # if it's an ObjectId-like, stringify it
+                    item[key] = str(item[key])
+                except Exception:
+                    pass
+        # ensure numeric fields are primitives
+        if "price" in item:
+            try:
+                item["price"] = float(item["price"])
+            except Exception:
+                item["price"] = item.get("price")
+        if "quantity" in item:
+            try:
+                item["quantity"] = int(item["quantity"])
+            except Exception:
+                item["quantity"] = item.get("quantity")
+        sanitized.append(item)
+    return sanitized
+
+
+# ---------------------------------------------------
+# Create Payment Order Endpoint
+# ---------------------------------------------------
+
 @router.post("/orders/create-payment-order")
 async def create_payment_order(current_user: dict = Depends(get_current_user)):
-    if current_user["role"] != "user":
-        raise HTTPException(status_code=403, detail="Only users can create orders")
+
+    # role check
+    if current_user.get("role") != "user":
+        raise HTTPException(403, "Only users can create orders")
 
     user_id = str(current_user["_id"])
 
+    # fetch cart
     cart = await db["carts"].find_one({"user_id": user_id})
     if not cart or not cart.get("items"):
-        raise HTTPException(status_code=400, detail="Cart is empty")
+        raise HTTPException(400, "Cart is empty")
 
+    # fetch default address
     address = await db["addresses"].find_one({"user_id": user_id, "is_default": True})
     if not address:
-        raise HTTPException(status_code=404, detail="No default address found")
-    if not address.get("coordinates") or len(address["coordinates"]) != 2:
-        raise HTTPException(status_code=400, detail="No default address with location found")
+        raise HTTPException(404, "No default address found")
 
-    # Optional: calculate delivery fee
-    # from commonfunction import calculate_delivery_fee
-    # delivery_fee = calculate_delivery_fee(address["coordinates"], chef_location)
+    coords = _get_address_coordinates(address)
+    if not coords:
+        raise HTTPException(400, "Address has no coordinates")
 
-    total_price = int(cart["total_price"])
-    amount_paise = total_price * 100  # or include fees if needed
+    # sanitize and compute
+    items = _sanitize_items(cart["items"])
 
+    try:
+        subtotal = float(cart.get("total_price", 0))
+    except:
+        raise HTTPException(400, "Invalid subtotal")
+
+    # calculate distances → delivery fee
+    max_distance = 0
+    for it in items:
+        chef_id_val = it.get("chef_id")
+        if not chef_id_val:
+            continue
+        try:
+            chef_doc = await db["chef_user"].find_one({"_id": ObjectId(chef_id_val)})
+        except:
+            continue
+
+        if chef_doc:
+            if "location" in chef_doc and chef_doc["location"].get("coordinates"):
+                chef_lon, chef_lat = chef_doc["location"]["coordinates"]
+            elif chef_doc.get("coordinates"):
+                chef_lon, chef_lat = chef_doc["coordinates"]
+            else:
+                continue
+
+            try:
+                distance_km = calculate_distance(coords[1], coords[0], chef_lat, chef_lon)
+                max_distance = max(max_distance, distance_km)
+                it["distance_km"] = round(distance_km, 2)
+            except:
+                pass
+
+    delivery_fee = calculate_delivery_fee(max_distance)
+
+    # financial breakdown
+    financials = calculate_financials(
+        subtotal=subtotal,
+        delivery_fee=delivery_fee,
+        platform_fee_percent=20,
+        gst_percent=0
+    )
+
+    billing_summary = financials.get("billing_summary", {})
+    grand_total = billing_summary.get("grand_total")
+
+    if grand_total is None:
+        raise HTTPException(500, "grand_total missing in billing summary")
+
+    # convert rupees → paise
+    amount_paise = _to_paise(grand_total)
+
+    # create razorpay order
     client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
-    razorpay_order = client.order.create({
-        "amount": amount_paise,
-        "currency": "INR",
-        "receipt": f"order_{user_id}",
-        "payment_capture": 1
-    })
 
+    try:
+        receipt = f"ord_{user_id[:10]}_{int(datetime.utcnow().timestamp())}"[:40]
+
+        razorpay_order = client.order.create({
+            "amount": amount_paise,       # paise (required)
+            "currency": "INR",
+            "receipt": receipt,
+            "payment_capture": 1,
+        })
+    except Exception as e:
+        raise HTTPException(502, f"Razorpay order creation failed: {e}")
+
+    # prepare temp order doc
     temp_order = {
         "user_id": user_id,
-        "cart_items": cart["items"],
-        "total_price": total_price,
-        "address": address,
-        "chef_id": cart["items"][0]["chef_id"],
+        "user_contact": {
+            "name": current_user.get("name"),
+            "email": current_user.get("email"),
+            "phone": current_user.get("phone_number")
+        },
+        "cart_items": items,
+        "subtotal": subtotal,
+        "delivery_fee": delivery_fee,
+        "final_amount": float(grand_total),   # RUPEES
+        "amount_paise": amount_paise,         # PAISE
+        "billing_summary": billing_summary,
+        "cash_flows": financials.get("cash_flows", {}),
+        "address": sanitize_doc(address),
         "razorpay_order_id": razorpay_order["id"],
+        "razorpay_receipt": receipt,
+        "razorpay_meta": {
+            "amount": razorpay_order["amount"],
+            "currency": razorpay_order["currency"],
+            "status": razorpay_order["status"],
+            "created_at": razorpay_order["created_at"]
+        },
         "status": "created",
         "created_at": datetime.utcnow()
     }
 
     await db["temp_orders"].insert_one(temp_order)
 
+    # RETURN rupees + paise
     return {
         "key": RAZORPAY_KEY_ID,
         "razorpay_order_id": razorpay_order["id"],
-        "amount": amount_paise,
+        "receipt": receipt,
+
+        # Razorpay amount must be paise
+        "amount": amount_paise,                        # 14000
+
+        # for UI
+        "final_amount": float(grand_total),           # 140
+        "amount_display": f"₹{float(grand_total):.2f}", # ₹140.00
+
         "currency": "INR",
         "user": {
-            "name": current_user["name"],
-            "email": current_user["email"]
+            "name": current_user.get("name"),
+            "email": current_user.get("email")
         }
     }
-
-
 @router.post("/orders/verify-payment")
-async def verify_payment(payload: dict, current_user: dict = Depends(get_current_user)):
-    from hashlib import sha256
-    import hmac
-
+async def verify_payment(payload: dict = Body(...), current_user: dict = Depends(get_current_user)):
+    # required fields
     order_id = payload.get("razorpay_order_id")
     payment_id = payload.get("razorpay_payment_id")
     signature = payload.get("razorpay_signature")
 
-    body = order_id + "|" + payment_id
+    if not order_id or not payment_id or not signature:
+        raise HTTPException(status_code=400, detail="Missing required payment fields")
+
+    # verify signature (server-side)
+    body = f"{order_id}|{payment_id}"
     expected_signature = hmac.new(
-        bytes(RAZORPAY_KEY_SECRET, "utf-8"),
-        bytes(body, "utf-8"),
-        sha256
+        key=bytes(RAZORPAY_KEY_SECRET, "utf-8"),
+        msg=bytes(body, "utf-8"),
+        digestmod=sha256
     ).hexdigest()
 
-    if expected_signature != signature:
+    if not hmac.compare_digest(expected_signature, signature):
         raise HTTPException(status_code=400, detail="Invalid payment signature")
 
+    # find the corresponding temp order
     temp_order = await db["temp_orders"].find_one({"razorpay_order_id": order_id})
     if not temp_order:
-        raise HTTPException(status_code=404, detail="Order not found")
+        raise HTTPException(status_code=404, detail="Temp order not found")
 
-    # Prevent duplicate order
+    # prevent duplicate processing
     existing = await db["orders"].find_one({"razorpay_order_id": order_id})
     if existing:
         raise HTTPException(status_code=400, detail="Order already processed")
 
+    # OPTIONAL (recommended): verify payment status with Razorpay API
+    client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
+    try:
+        payment_fetch = client.payment.fetch(payment_id)
+        # ensure payment is captured
+        if payment_fetch.get("status") != "captured":
+            raise HTTPException(status_code=400, detail=f"Payment not captured (status={payment_fetch.get('status')})")
+    except HTTPException:
+        raise
+    except Exception as e:
+        # API/network error - still surface a useful error
+        raise HTTPException(status_code=502, detail=f"Failed to verify payment with Razorpay: {e}")
+
+    # Build final order using fields stored in temp_order
+    # Note: temp_order stores sanitized address and final_amount (per create_payment_order)
+    chef_ids = temp_order.get("chef_ids") or []
+    chef_id = chef_ids[0] if chef_ids else temp_order.get("chef_id")  # fallback
+
     final_order = {
-        "user_id": temp_order["user_id"],
-        "chef_id": temp_order["chef_id"],
-        "items": temp_order["cart_items"],
-        "total_price": temp_order["total_price"],
-        "address": temp_order["address"],
+        "user_id": temp_order.get("user_id"),
+        "chef_id": chef_id,
+        "items": temp_order.get("cart_items", []),
+        "total_price": temp_order.get("final_amount", temp_order.get("subtotal", 0.0)),
+        "address": temp_order.get("address"),
         "status": "paid",
         "chef_status": "pending",
         "delivery_status": "pending",
         "razorpay_order_id": order_id,
         "razorpay_payment_id": payment_id,
         "payment_verified_at": datetime.utcnow(),
-        "created_at": temp_order["created_at"]
+        "created_at": temp_order.get("created_at", datetime.utcnow()),
+        # keep bookkeeping fields (optional)
+        "billing_summary": temp_order.get("billing_summary", {}),
+        "cash_flows": temp_order.get("cash_flows", {}),
+        "amount_paise": temp_order.get("amount_paise")
     }
 
-    await db["orders"].insert_one(final_order)
-    await db["carts"].delete_one({"user_id": temp_order["user_id"]})
-    await db["temp_orders"].delete_one({"razorpay_order_id": order_id})
+    # insert final order and cleanup
+    try:
+        res = await db["orders"].insert_one(final_order)
+        inserted_id = getattr(res, "inserted_id", None)
+        # delete cart & temp order
+        await db["carts"].delete_one({"user_id": temp_order.get("user_id")})
+        await db["temp_orders"].delete_one({"razorpay_order_id": order_id})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to finalize order: {e}")
 
-    return {"status": "success", "message": "Payment verified and order placed successfully"}
+    # sanitize final_order for response (avoid ObjectId/datetime issues)
+    if inserted_id:
+        final_order["_id"] = inserted_id
+    safe_order = sanitize_doc(final_order)
+
+    return {"status": "success", "message": "Payment verified and order placed successfully", "order": safe_order}
 
 #-------------------------------get all orders--------------------------#
 @router.get("/orders/user")
